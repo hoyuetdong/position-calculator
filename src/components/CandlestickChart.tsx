@@ -72,6 +72,7 @@ export default function CandlestickChart({
 }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
+  const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null)
   const seriesRef = useRef<{
     ema20?: ISeriesApi<"Line">
     sma50?: ISeriesApi<"Line">
@@ -96,60 +97,8 @@ export default function CandlestickChart({
   useEffect(() => {
     if (!chartContainerRef.current || !data || data.length === 0) return
 
-    if (!chartRef.current) {
-      const chart = createChart(chartContainerRef.current, {
-        layout: {
-          background: { type: ColorType.Solid, color: '#1a1a1a' },
-          textColor: '#888',
-        },
-        grid: {
-          vertLines: { color: '#333' },
-          horzLines: { color: '#333' },
-        },
-        width: chartContainerRef.current.clientWidth,
-        height: 300,
-        crosshair: {
-          mode: CrosshairMode.Normal,
-        },
-        timeScale: {
-          borderColor: '#555',
-          timeVisible: true,
-        },
-        rightPriceScale: {
-          borderColor: '#555',
-        },
-      })
-
-      chartRef.current = chart
-
-      // Add click handler - convert Y coordinate directly to price using API
-      chart.subscribeClick((param: MouseEventParams) => {
-        if (!param.point || !onBuyPriceChange) return;
-        
-        // 直接用 Series instance 去將 Y 坐標轉做價錢
-        const priceAtClick = candlestickSeries.coordinateToPrice(param.point.y);
-        
-        if (priceAtClick !== null && !isNaN(priceAtClick)) {
-          onBuyPriceChange(priceAtClick);
-          
-          // 如果有ATR咪自動計止蝕價 (用ref確保用到最新既值)
-          if (atrRef.current && onStopLossChange) {
-            const stopLossPrice = priceAtClick - (atrRef.current * atrMultiplierRef.current);
-            onStopLossChange(stopLossPrice);
-          }
-        }
-      })
-
-      // Candlestick series
-      const candlestickSeries = chart.addSeries(CandlestickSeries, {
-        upColor: '#00ff88',
-        downColor: '#ff4d4d',
-        borderUpColor: '#00ff88',
-        borderDownColor: '#ff4d4d',
-        wickUpColor: '#00ff88',
-        wickDownColor: '#ff4d4d',
-      })
-
+    // 如果已經有chart，就update data唔好re-zoom
+    if (chartRef.current && candlestickSeriesRef.current) {
       const chartData = data.map(d => ({
         time: d.time as any,
         open: d.open,
@@ -157,18 +106,21 @@ export default function CandlestickChart({
         low: d.low,
         close: d.close,
       }))
-
-      candlestickSeries.setData(chartData)
-
-      // MA lines
+      candlestickSeriesRef.current.setData(chartData)
+      
+      // Fit content to show all data
+      chartRef.current.timeScale().fitContent()
+      
+      // Update MA lines
       const closes = data.map(d => d.close)
-      const ema20Data = calculateEMAData(closes, 20)
-      const sma50Data = calculateSMAData(closes, 50)
-      const sma200Data = calculateSMAData(closes, 200)
-
-      // EMA20 (橙色)
+      
+      // EMA20
+      if (seriesRef.current.ema20) {
+        try { chartRef.current.removeSeries(seriesRef.current.ema20) } catch (e) {}
+      }
       if (data.length >= 20) {
-        const ema20Line = chart.addSeries(LineSeries, {
+        const ema20Data = calculateEMAData(closes, 20)
+        const ema20Line = chartRef.current.addSeries(LineSeries, {
           color: '#ff9900',
           lineWidth: 1,
           priceLineVisible: false,
@@ -182,10 +134,14 @@ export default function CandlestickChart({
           seriesRef.current.ema20 = ema20Line
         }
       }
-
-      // SMA50 (藍色)
+      
+      // SMA50
+      if (seriesRef.current.sma50) {
+        try { chartRef.current.removeSeries(seriesRef.current.sma50) } catch (e) {}
+      }
       if (data.length >= 50) {
-        const sma50Line = chart.addSeries(LineSeries, {
+        const sma50Data = calculateSMAData(closes, 50)
+        const sma50Line = chartRef.current.addSeries(LineSeries, {
           color: '#0088ff',
           lineWidth: 1,
           priceLineVisible: false,
@@ -199,10 +155,14 @@ export default function CandlestickChart({
           seriesRef.current.sma50 = sma50Line
         }
       }
-
-      // SMA200 (紫色)
+      
+      // SMA200
+      if (seriesRef.current.sma200) {
+        try { chartRef.current.removeSeries(seriesRef.current.sma200) } catch (e) {}
+      }
       if (data.length >= 200) {
-        const sma200Line = chart.addSeries(LineSeries, {
+        const sma200Data = calculateSMAData(closes, 200)
+        const sma200Line = chartRef.current.addSeries(LineSeries, {
           color: '#aa00ff',
           lineWidth: 1,
           priceLineVisible: false,
@@ -216,25 +176,148 @@ export default function CandlestickChart({
           seriesRef.current.sma200 = sma200Line
         }
       }
+      
+      return
+    }
 
-      const handleResize = () => {
-        if (chartContainerRef.current && chartRef.current) {
-          chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth })
-        }
-      }
-      window.addEventListener('resize', handleResize)
+    // 第一次創建chart
+    const chart = createChart(chartContainerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: '#1a1a1a' },
+        textColor: '#888',
+      },
+      grid: {
+        vertLines: { color: '#333' },
+        horzLines: { color: '#333' },
+      },
+      width: chartContainerRef.current.clientWidth,
+      height: 300,
+      crosshair: {
+        mode: CrosshairMode.Normal,
+      },
+      timeScale: {
+        borderColor: '#555',
+        timeVisible: true,
+      },
+      rightPriceScale: {
+        borderColor: '#555',
+      },
+    })
 
-      return () => {
-        window.removeEventListener('resize', handleResize)
-        try {
-          if (chartRef.current) {
-            chartRef.current.remove()
-            chartRef.current = null
-          }
-        } catch (e) {}
+    chartRef.current = chart
+
+    // Candlestick series
+    const candlestickSeries = chart.addSeries(CandlestickSeries, {
+      upColor: '#00ff88',
+      downColor: '#ff4d4d',
+      borderUpColor: '#00ff88',
+      borderDownColor: '#ff4d4d',
+      wickUpColor: '#00ff88',
+      wickDownColor: '#ff4d4d',
+    })
+    candlestickSeriesRef.current = candlestickSeries
+
+    const chartData = data.map(d => ({
+      time: d.time as any,
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+    }))
+
+    candlestickSeries.setData(chartData)
+
+    // MA lines
+    const closes = data.map(d => d.close)
+    const ema20Data = calculateEMAData(closes, 20)
+    const sma50Data = calculateSMAData(closes, 50)
+    const sma200Data = calculateSMAData(closes, 200)
+
+    // EMA20 (橙色)
+    if (data.length >= 20) {
+      const ema20Line = chart.addSeries(LineSeries, {
+        color: '#ff9900',
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      })
+      const ema20ChartData = data
+        .map((d, i) => ({ time: d.time as any, value: ema20Data[i] }))
+        .filter(d => d.value !== null && d.value !== undefined) as { time: any; value: number }[]
+      if (ema20ChartData.length > 0) {
+        ema20Line.setData(ema20ChartData)
+        seriesRef.current.ema20 = ema20Line
       }
     }
-  }, [data, onBuyPriceChange, onStopLossChange])
+
+    // SMA50 (藍色)
+    if (data.length >= 50) {
+      const sma50Line = chart.addSeries(LineSeries, {
+        color: '#0088ff',
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      })
+      const sma50ChartData = data
+        .map((d, i) => ({ time: d.time as any, value: sma50Data[i] }))
+        .filter(d => d.value !== null && d.value !== undefined) as { time: any; value: number }[]
+      if (sma50ChartData.length > 0) {
+        sma50Line.setData(sma50ChartData)
+        seriesRef.current.sma50 = sma50Line
+      }
+    }
+
+    // SMA200 (紫色)
+    if (data.length >= 200) {
+      const sma200Line = chart.addSeries(LineSeries, {
+        color: '#aa00ff',
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      })
+      const sma200ChartData = data
+        .map((d, i) => ({ time: d.time as any, value: sma200Data[i] }))
+        .filter(d => d.value !== null && d.value !== undefined) as { time: any; value: number }[]
+      if (sma200ChartData.length > 0) {
+        sma200Line.setData(sma200ChartData)
+        seriesRef.current.sma200 = sma200Line
+      }
+    }
+
+    // Add click handler
+    chart.subscribeClick((param: MouseEventParams) => {
+      if (!param.point || !onBuyPriceChange || !candlestickSeriesRef.current) return;
+      
+      const priceAtClick = candlestickSeriesRef.current.coordinateToPrice(param.point.y);
+      
+      if (priceAtClick !== null && !isNaN(priceAtClick)) {
+        onBuyPriceChange(priceAtClick);
+        
+        if (atrRef.current && onStopLossChange) {
+          const stopLossPrice = priceAtClick - (atrRef.current * atrMultiplierRef.current);
+          onStopLossChange(stopLossPrice);
+        }
+      }
+    })
+
+    const handleResize = () => {
+      if (chartContainerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth })
+      }
+    }
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      try {
+        if (chartRef.current) {
+          chartRef.current.remove()
+          chartRef.current = null
+          candlestickSeriesRef.current = null
+        }
+      } catch (e) {}
+    }
+  }, [data])
 
   // Update buy/stop lines
   useEffect(() => {

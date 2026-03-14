@@ -10,16 +10,13 @@ import {
   Trash2,
   Settings,
   Info,
-  Wifi,
-  WifiOff,
   RefreshCw
 } from 'lucide-react'
 import { 
   getQuote, 
   getHistoricalKLines,
-  initFutuAPI,
   type QuoteData 
-} from '@/lib/futuAPI'
+} from '@/lib/yahooAPI'
 import CandlestickChart from '@/components/CandlestickChart'
 
 interface Position {
@@ -40,25 +37,7 @@ interface Settings {
   atrMultiplier: number
 }
 
-// Connection status component
-function ConnectionStatus({ connected }: { connected: boolean }) {
-  return (
-    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-card border border-border">
-      {connected ? (
-        <>
-          <Wifi className="w-4 h-4 text-profit" />
-          <span className="text-xs text-profit">已連接Yahoo</span>
-        </>
-      ) : (
-        <>
-          <WifiOff className="w-4 h-4 text-loss" />
-          <span className="text-xs text-loss">未連接</span>
-        </>
-      )}
-    </div>
-  )
-}
-
+// Data source switcher component
 // R-multiples visualization
 function RMultiplierBar({ 
   currentPrice, 
@@ -183,6 +162,7 @@ export default function Home() {
   }, [settings, hydrated])
   
   const [ticker, setTicker] = useState('')
+  const [chartDays, setChartDays] = useState(2000)
   const [buyPoint, setBuyPoint] = useState('')
   const [stopLoss, setStopLoss] = useState('')
   const [quoteData, setQuoteData] = useState<QuoteData | null>(null)
@@ -204,14 +184,13 @@ export default function Home() {
     }
   }, [atr, settings.atrMultiplier])
   
-  // Initialize Futu API connection
+  // Initialize API connection
   useEffect(() => {
     const init = async () => {
       try {
-        await initFutuAPI()
         setConnected(true)
       } catch (error) {
-        console.error('Futu API connection error:', error)
+        console.error('API connection error:', error)
         setConnected(false)
       }
     }
@@ -225,13 +204,12 @@ export default function Home() {
         setLoading(true)
         try {
           const quote = await getQuote(ticker)
+          const klines = await getHistoricalKLines(ticker, chartDays)
+          
           setQuoteData(quote)
           
-          // Get historical data for ATR calculation and chart
-          const klines = await getHistoricalKLines(ticker, 500) // Get 60 days for chart
-          
           // Store historical data for chart
-          const histData = klines.map(k => ({
+          const histData = klines.map((k: any) => ({
             time: k.time,
             open: parseFloat(k.open),
             high: parseFloat(k.high),
@@ -240,21 +218,23 @@ export default function Home() {
           }))
           setHistoricalData(histData)
           
+          // Calculate ATR
+          let calculatedAtr: number | null = null
           if (klines.length >= 14) {
-            const atrData = klines.slice(-14).map(k => {
+            const atrData = klines.slice(-14).map((k: any) => {
               const high = parseFloat(k.high)
               const low = parseFloat(k.low)
               const close = parseFloat(k.close)
               const tr = Math.max(high - low, Math.abs(high - close), Math.abs(low - close))
               return tr
             })
-            const calculatedAtr = atrData.reduce((a, b) => a + b, 0) / 14
-            setAtr(calculatedAtr)
-            
-            // Auto-fill buy point with current price if empty
-            if (!buyPoint && quote.lastPrice) {
-              setBuyPoint(quote.lastPrice.toFixed(2))
-            }
+            calculatedAtr = atrData.reduce((a: number, b: number) => a + b, 0) / 14
+          }
+          setAtr(calculatedAtr)
+          
+          // Auto-fill buy point with current price if empty
+          if (!buyPoint && quote.lastPrice) {
+            setBuyPoint(quote.lastPrice.toFixed(2))
           }
         } catch (error) {
           console.error('Error fetching quote:', error)
@@ -267,7 +247,7 @@ export default function Home() {
     
     const timer = setTimeout(fetchData, 500)
     return () => clearTimeout(timer)
-  }, [ticker])
+  }, [ticker, chartDays])
   
   // Calculations（避免 NaN：空字串當 0）
   const buyNum = parseFloat(buyPoint) || 0
@@ -319,7 +299,6 @@ export default function Home() {
   const reconnect = async () => {
     setLoading(true)
     try {
-      await initFutuAPI()
       setConnected(true)
     } catch {
       setConnected(false)
@@ -335,10 +314,13 @@ export default function Home() {
           <div className="flex items-center gap-3">
             <Calculator className="w-6 h-6 text-primary" />
             <h1 className="text-xl font-bold">VCP Position Calculator</h1>
-            <span className="text-xs text-muted-foreground">(Yahoo Finance)</span>
           </div>
           <div className="flex items-center gap-3">
-            <ConnectionStatus connected={connected} />
+            {connected && (
+              <span className="text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-600 dark:text-green-400">
+                Yahoo Finance
+              </span>
+            )}
             {!connected && (
               <button 
                 type="button"
@@ -461,7 +443,7 @@ export default function Home() {
                       <button 
                         type="button"
                         onClick={() => { const v = quoteData.ema20; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
-                        className="font-mono text-cyan-400 hover:underline cursor-pointer"
+                        className="font-mono text-orange-400 hover:underline cursor-pointer"
                         title="Set as buy price with ATR stop"
                       >${quoteData.ema20?.toFixed(2) || 'N/A'}</button>
                     </div>
@@ -470,7 +452,7 @@ export default function Home() {
                       <button 
                         type="button"
                         onClick={() => { const v = quoteData.sma50; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
-                        className="font-mono text-yellow-400 hover:underline cursor-pointer"
+                        className="font-mono text-blue-400 hover:underline cursor-pointer"
                         title="Set as buy price with ATR stop"
                       >${quoteData.sma50?.toFixed(2) || 'N/A'}</button>
                     </div>
@@ -479,7 +461,7 @@ export default function Home() {
                       <button 
                         type="button"
                         onClick={() => { const v = quoteData.sma200; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
-                        className="font-mono text-orange-400 hover:underline cursor-pointer"
+                        className="font-mono text-purple-400 hover:underline cursor-pointer"
                         title="Set as buy price with ATR stop"
                       >${quoteData.sma200?.toFixed(2) || 'N/A'}</button>
                     </div>
@@ -518,6 +500,25 @@ export default function Home() {
                     placeholder="例如: NVDA, 00700, 9888"
                     className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
                   />
+                </div>
+
+                <div>
+                  <label className="text-sm text-muted-foreground">圖表日數</label>
+                  <select
+                    value={chartDays}
+                    onChange={(e) => setChartDays(parseInt(e.target.value))}
+                    disabled={!quoteData}
+                    className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono disabled:opacity-50"
+                  >
+                    <option value="100">100日</option>
+                    <option value="200">200日</option>
+                    <option value="300">300日</option>
+                    <option value="500">500日</option>
+                    <option value="730">730日 (2年)</option>
+                    <option value="1000">1000日 (約3年)</option>
+                    <option value="1500">1500日 (約4年)</option>
+                    <option value="2000">2000日 (約5年)</option>
+                  </select>
                 </div>
                 
                 <div>

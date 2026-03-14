@@ -1,6 +1,5 @@
 /**
  * Yahoo Finance API Client
- * 通過本地 proxy server 攞數據，避免 CORS
  */
 
 export interface QuoteData {
@@ -43,7 +42,7 @@ function normalizeSymbol(symbol: string): string {
 }
 
 /**
- * 計算 SMA (Simple Moving Average)
+ * 計算 SMA
  */
 function calculateSMA(data: number[], period: number): number | null {
   if (data.length < period) return null
@@ -52,73 +51,79 @@ function calculateSMA(data: number[], period: number): number | null {
 }
 
 /**
- * 計算 EMA (Exponential Moving Average)
+ * 計算 EMA
  */
 function calculateEMA(data: number[], period: number): number | null {
   if (data.length < period) return null
+  
+  // 初始 EMA = SMA of first 'period' values
+  const initialSlice = data.slice(0, period)
+  let ema = initialSlice.reduce((a, b) => a + b, 0) / period
+  
   const multiplier = 2 / (period + 1)
-  let ema = data[0]
-  for (let i = 1; i < data.length; i++) {
+  
+  // 由第period個數據開始計
+  for (let i = period; i < data.length; i++) {
     ema = (data[i] - ema) * multiplier + ema
   }
   return ema
 }
 
 /**
- * 通過本地 API proxy 獲取數據
- */
-async function fetchLocal(symbol: string, range: string = '1y'): Promise<any> {
-  const response = await fetch(`/api/quote/${symbol}?range=${range}`)
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`)
-  }
-  return response.json()
-}
-
-/**
  * 初始化
  */
 export async function initFutuAPI(): Promise<void> {
-  // Proxy 已喺度
+  // 冇野要做
 }
 
 /**
- * 獲取報價
+ * 獲取報價 - 直接用本地 proxy
  */
 export async function getQuote(symbol: string): Promise<QuoteData> {
   const normalized = normalizeSymbol(symbol)
   
   try {
-    const data = await fetchLocal(normalized)
+    const response = await fetch(`/api/quote/${symbol}`)
+    const data = await response.json()
     
-    const result = data?.chart?.result?.[0]
-    if (!result) {
-      throw new Error(`No data for ${symbol}`)
+    if (data.error) {
+      throw new Error(data.error)
     }
     
-    const meta = result.meta
+    // 計算移動平均線需要歷史數據
+    let ema10: number | null = null
+    let ema20: number | null = null
+    let sma50: number | null = null
+    let sma200: number | null = null
     
-    // 計算移動平均線
-    const quote = result.indicators?.quote?.[0] || {}
-    const closes = (quote.close || []).filter((c: number) => c > 0)
-    
-    const ema10 = calculateEMA(closes, 10)
-    const ema20 = calculateEMA(closes, 20)
-    const sma50 = calculateSMA(closes, 50)
-    const sma200 = calculateSMA(closes, 200)
+    try {
+      const histResponse = await fetch(`/api/klines/${symbol}?days=2000`)
+      const histData = await histResponse.json()
+      
+      if (Array.isArray(histData) && histData.length > 0) {
+        const closes = histData.map((k: any) => parseFloat(k.close)).filter((c: number) => c > 0)
+        ema10 = calculateEMA(closes, 10)
+        ema20 = calculateEMA(closes, 20)
+        sma50 = calculateSMA(closes, 50)
+        sma200 = calculateSMA(closes, 200)
+      }
+    } catch {
+      // 移動平均線 optional，fail咗都唔理
+    }
     
     return {
-      symbol: normalized,
-      name: meta.shortName || meta.symbol || normalized,
-      lastPrice: meta.regularMarketPrice || 0,
-      open: meta.chartPreviousClose || meta.regularMarketPreviousClose || 0,
-      high: meta.regularMarketDayHigh || 0,
-      low: meta.regularMarketDayLow || 0,
-      volume: meta.regularMarketVolume || 0,
-      change: meta.regularMarketChange || 0,
-      changePercent: meta.regularMarketChangePercent || 0,
-      high52w: meta.fiftyTwoWeekHigh || 0,
-      low52w: meta.fiftyTwoWeekLow || 0,
+      symbol: data.symbol || normalized,
+      name: data.name || normalized,
+      lastPrice: data.lastPrice,
+      open: data.open,
+      high: data.high,
+      low: data.low,
+      volume: data.volume,
+      turnover: data.turnover,
+      change: data.change,
+      changePercent: data.changePercent,
+      high52w: data.high52w,
+      low52w: data.low52w,
       ema10,
       ema20,
       sma50,
@@ -136,28 +141,14 @@ export async function getQuote(symbol: string): Promise<QuoteData> {
 export async function getHistoricalKLines(symbol: string, days: number = 30): Promise<any[]> {
   const normalized = normalizeSymbol(symbol)
   
-  // 需要更長時間既數據俾圖表同移動平均線 (最少 250 日)
-  const range = days >= 300 ? '3y' : (days >= 250 ? '2y' : (days >= 60 ? '1y' : '3mo'))
-  
   try {
-    const data = await fetchLocal(normalized, range)
-    const result = data?.chart?.result?.[0]
+    const response = await fetch(`/api/klines/${symbol}?days=${Math.min(3000, days)}`)
+    const data = await response.json()
     
-    if (!result) {
-      return []
+    if (Array.isArray(data)) {
+      return data
     }
-    
-    const timestamps = result.timestamp || []
-    const quote = result.indicators?.quote?.[0] || {}
-    
-    return timestamps.map((time: number, i: number) => ({
-      time,
-      open: quote.open?.[i] || 0,
-      high: quote.high?.[i] || 0,
-      low: quote.low?.[i] || 0,
-      close: quote.close?.[i] || 0,
-      volume: quote.volume?.[i] || 0
-    }))
+    return []
   } catch (error) {
     console.error('[API] K-line error:', error)
     return []
