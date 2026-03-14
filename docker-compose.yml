@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # 富途行情網關 (淨係畀本地連線)
+  futuopend:
+    image: ostai/futuopend:latest
+    container_name: futuopend
+    tty: true
+    stdin_open: true
+    ports:
+      - "127.0.0.1:11111:11111"  # TCP 行情 - 淨係本機
+      - "127.0.0.1:11112:11112"  # WebSocket - 淨係本機
+    environment:
+      # 登入憑證 (用 MD5 密碼)
+      - FUTU_LOGIN_ACCOUNT=${FUTU_LOGIN_ACCOUNT}
+      - FUTU_LOGIN_PWD_MD5=${FUTU_LOGIN_PWD_MD5}
+      # 股票市場權限
+      - MARKET_HK=1
+      - MARKET_US=1
+      - MARKET_CN=0
+    volumes:
+      - futuopend_data:/data
+    restart: unless-stopped
+    networks:
+      - vcp-network
+
+  # Web應用
+  vcp-calculator:
+    build: .
+    container_name: vcp-calculator
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - FUTU_HOST=futuopend
+      - FUTU_PORT=11111
+    depends_on:
+      - futuopend
+    restart: unless-stopped
+    networks:
+      - vcp-network
+
+volumes:
+  futuopend_data:
+
+networks:
+  vcp-network:
+    driver: bridge
