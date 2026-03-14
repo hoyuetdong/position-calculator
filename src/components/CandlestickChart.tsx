@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { createChart, ColorType, CrosshairMode, CandlestickSeries, LineSeries, IChartApi, ISeriesApi, MouseEventParams } from 'lightweight-charts'
 
 interface ChartProps {
@@ -13,7 +13,10 @@ interface ChartProps {
   }[]
   buyPrice?: number
   stopLoss?: number
+  atr?: number | null
+  atrMultiplier?: number
   onBuyPriceChange?: (price: number) => void
+  onStopLossChange?: (price: number) => void
 }
 
 // Calculate EMA for entire array
@@ -58,7 +61,15 @@ function calculateSMAData(data: number[], period: number): (number | null)[] {
   return result
 }
 
-export default function CandlestickChart({ data, buyPrice, stopLoss, onBuyPriceChange }: ChartProps) {
+export default function CandlestickChart({ 
+  data, 
+  buyPrice, 
+  stopLoss, 
+  atr, 
+  atrMultiplier = 1.5,
+  onBuyPriceChange, 
+  onStopLossChange 
+}: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<{
@@ -68,6 +79,18 @@ export default function CandlestickChart({ data, buyPrice, stopLoss, onBuyPriceC
     buyLine?: ISeriesApi<"Line">
     stopLine?: ISeriesApi<"Line">
   }>({})
+  
+  // 用ref去store latest atr同atrMultiplier，等click handler可以access到最新值
+  const atrRef = useRef(atr)
+  const atrMultiplierRef = useRef(atrMultiplier)
+  
+  useEffect(() => {
+    atrRef.current = atr
+  }, [atr])
+  
+  useEffect(() => {
+    atrMultiplierRef.current = atrMultiplier
+  }, [atrMultiplier])
 
   // Initialize chart
   useEffect(() => {
@@ -108,6 +131,12 @@ export default function CandlestickChart({ data, buyPrice, stopLoss, onBuyPriceC
         
         if (priceAtClick !== null && !isNaN(priceAtClick)) {
           onBuyPriceChange(priceAtClick);
+          
+          // 如果有ATR咪自動計止蝕價 (用ref確保用到最新既值)
+          if (atrRef.current && onStopLossChange) {
+            const stopLossPrice = priceAtClick - (atrRef.current * atrMultiplierRef.current);
+            onStopLossChange(stopLossPrice);
+          }
         }
       })
 
@@ -205,7 +234,7 @@ export default function CandlestickChart({ data, buyPrice, stopLoss, onBuyPriceC
         } catch (e) {}
       }
     }
-  }, [data, onBuyPriceChange])
+  }, [data, onBuyPriceChange, onStopLossChange])
 
   // Update buy/stop lines
   useEffect(() => {

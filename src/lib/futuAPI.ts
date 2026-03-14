@@ -4,7 +4,8 @@
  */
 
 export interface QuoteData {
-  symbol: string
+  symbol?: string
+  ticker?: string
   name?: string
   lastPrice?: number
   open?: number
@@ -18,7 +19,6 @@ export interface QuoteData {
   high52w?: number
   low52w?: number
   marketCap?: number
-  // Moving Averages
   ema10?: number | null
   ema20?: number | null
   sma50?: number | null
@@ -79,7 +79,7 @@ async function fetchLocal(symbol: string, range: string = '1y'): Promise<any> {
  * 初始化
  */
 export async function initFutuAPI(): Promise<void> {
-  console.log('[API] Proxy ready')
+  // Proxy 已喺度
 }
 
 /**
@@ -193,5 +193,5 @@ export async function getATR(symbol: string, period: number = 14): Promise<numbe
  * 關閉連接
  */
 export async function closeFutuAPI(): Promise<void> {
-  console.log('[API] Closed')
+  // 冇野要做
 }

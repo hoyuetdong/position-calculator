@@ -158,22 +158,26 @@ export default function Home() {
     defaultRiskPercent: 0.3,
     atrMultiplier: 1.5
   })
+  // Hydration fix: defer all client-side logic
   const [hydrated, setHydrated] = useState(false)
   
-  // Load settings from localStorage after mount (client only)
+  // 合併 load + save 係同一個 effect，避免 race condition
   useEffect(() => {
-    const saved = localStorage.getItem('vcp-settings')
-    if (saved) {
-      try {
-        setSettings(JSON.parse(saved))
-      } catch (e) {}
+    // Client only: load from localStorage
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('vcp-settings')
+      if (saved) {
+        try {
+          setSettings(JSON.parse(saved))
+        } catch (e) {}
+      }
+      setHydrated(true)
     }
-    setHydrated(true)
   }, [])
   
-  // Save settings to localStorage when they change
+  // Save when settings change (only after hydration)
   useEffect(() => {
-    if (hydrated) {
+    if (hydrated && typeof window !== 'undefined') {
       localStorage.setItem('vcp-settings', JSON.stringify(settings))
     }
   }, [settings, hydrated])
@@ -185,16 +189,10 @@ export default function Home() {
   const [atr, setAtr] = useState<number | null>(null)
   const [historicalData, setHistoricalData] = useState<{time: number; open: number; high: number; low: number; close: number}[]>([])
   const [loading, setLoading] = useState(false)
-  const [connected, setConnected] = useState(false)
+  // Yahoo 唔使連線，預設已連接
+  const [connected, setConnected] = useState(true)
   const [positions, setPositions] = useState<Position[]>([])
   const [showSettings, setShowSettings] = useState(false)
-  
-  // Save settings to localStorage when they change (only on client)
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('vcp-settings', JSON.stringify(settings))
-    }
-  }, [settings])
   
   // Handle chart click - set buy price and auto-calculate stop loss
   const handleChartClick = useCallback((price: number) => {
@@ -271,13 +269,15 @@ export default function Home() {
     return () => clearTimeout(timer)
   }, [ticker])
   
-  // Calculations
+  // Calculations（避免 NaN：空字串當 0）
+  const buyNum = parseFloat(buyPoint) || 0
+  const stopNum = parseFloat(stopLoss) || 0
   const riskAmount = settings.accountSize * (settings.defaultRiskPercent / 100)
-  const stopDistance = parseFloat(buyPoint) - parseFloat(stopLoss)
+  const stopDistance = buyNum - stopNum
   const sharesToBuy = stopDistance > 0 ? Math.floor(riskAmount / stopDistance) : 0
-  const positionValue = sharesToBuy * parseFloat(buyPoint || '0')
-  const portfolioPercent = (positionValue / settings.accountSize) * 100
-  const stopLossPercent = (stopDistance / parseFloat(buyPoint || '1')) * 100
+  const positionValue = sharesToBuy * buyNum
+  const portfolioPercent = settings.accountSize > 0 ? (positionValue / settings.accountSize) * 100 : 0
+  const stopLossPercent = buyNum > 0 ? (stopDistance / buyNum) * 100 : 0
   
   // Suggested stop loss from ATR - based on buy price if available, otherwise last price
   const basePrice = parseFloat(buyPoint) || quoteData?.lastPrice || 0
@@ -341,15 +341,17 @@ export default function Home() {
             <ConnectionStatus connected={connected} />
             {!connected && (
               <button 
+                type="button"
                 onClick={reconnect}
-                className="p-2 rounded-lg hover:bg-secondary transition-colors"
+                className="p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
               >
                 <RefreshCw className="w-5 h-5" />
               </button>
             )}
             <button 
+              type="button"
               onClick={() => setShowSettings(!showSettings)}
-              className="p-2 rounded-lg hover:bg-secondary transition-colors"
+              className="p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
             >
               <Settings className="w-5 h-5" />
             </button>
@@ -448,7 +450,8 @@ export default function Home() {
                     <div>
                       <span className="text-muted-foreground">EMA10: </span>
                       <button 
-                        onClick={() => { setBuyPoint(quoteData.ema10?.toFixed(2) || ''); if(atr) setStopLoss((quoteData.ema10 - atr * settings.atrMultiplier).toFixed(2)); }}
+                        type="button"
+                        onClick={() => { const v = quoteData.ema10; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
                         className="font-mono text-cyan-400 hover:underline cursor-pointer"
                         title="Set as buy price with ATR stop"
                       >${quoteData.ema10?.toFixed(2) || 'N/A'}</button>
@@ -456,7 +459,8 @@ export default function Home() {
                     <div>
                       <span className="text-muted-foreground">EMA20: </span>
                       <button 
-                        onClick={() => { setBuyPoint(quoteData.ema20?.toFixed(2) || ''); if(atr) setStopLoss((quoteData.ema20 - atr * settings.atrMultiplier).toFixed(2)); }}
+                        type="button"
+                        onClick={() => { const v = quoteData.ema20; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
                         className="font-mono text-cyan-400 hover:underline cursor-pointer"
                         title="Set as buy price with ATR stop"
                       >${quoteData.ema20?.toFixed(2) || 'N/A'}</button>
@@ -464,7 +468,8 @@ export default function Home() {
                     <div>
                       <span className="text-muted-foreground">SMA50: </span>
                       <button 
-                        onClick={() => { setBuyPoint(quoteData.sma50?.toFixed(2) || ''); if(atr) setStopLoss((quoteData.sma50 - atr * settings.atrMultiplier).toFixed(2)); }}
+                        type="button"
+                        onClick={() => { const v = quoteData.sma50; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
                         className="font-mono text-yellow-400 hover:underline cursor-pointer"
                         title="Set as buy price with ATR stop"
                       >${quoteData.sma50?.toFixed(2) || 'N/A'}</button>
@@ -472,7 +477,8 @@ export default function Home() {
                     <div>
                       <span className="text-muted-foreground">SMA200: </span>
                       <button 
-                        onClick={() => { setBuyPoint(quoteData.sma200?.toFixed(2) || ''); if(atr) setStopLoss((quoteData.sma200 - atr * settings.atrMultiplier).toFixed(2)); }}
+                        type="button"
+                        onClick={() => { const v = quoteData.sma200; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
                         className="font-mono text-orange-400 hover:underline cursor-pointer"
                         title="Set as buy price with ATR stop"
                       >${quoteData.sma200?.toFixed(2) || 'N/A'}</button>
@@ -488,7 +494,10 @@ export default function Home() {
                       data={historicalData} 
                       buyPrice={buyPoint ? parseFloat(buyPoint) : undefined}
                       stopLoss={stopLoss ? parseFloat(stopLoss) : undefined}
+                      atr={atr}
+                      atrMultiplier={settings.atrMultiplier}
                       onBuyPriceChange={handleChartClick}
+                      onStopLossChange={(price) => setStopLoss(price.toFixed(2))}
                     />
                   </div>
                 )}
@@ -535,9 +544,10 @@ export default function Home() {
                       className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
                     />
                     {suggestedStopLoss && (
-                      <button
+                      <button 
+                        type="button"
                         onClick={applySuggestedStopLoss}
-                        className="mt-1 px-3 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition-colors text-sm"
+                        className="mt-1 px-3 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition-colors text-sm cursor-pointer"
                         title={`建議: $${suggestedStopLoss.toFixed(2)} (${settings.atrMultiplier}x ATR)`}
                       >
                         <Info className="w-4 h-4" />
@@ -609,16 +619,18 @@ export default function Home() {
               
               <div className="flex gap-2 mt-6">
                 <button
+                  type="button"
                   onClick={savePosition}
                   disabled={sharesToBuy <= 0}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
                 >
                   <Save className="w-4 h-4" />
                   儲存
                 </button>
                 <button
-                  onClick={() => { setTicker(''); setBuyPoint(''); setStopLoss(''); setQuoteData(null); setAtr(null); }}
-                  className="px-4 py-3 bg-secondary border border-border rounded-lg hover:bg-secondary/80 transition-colors"
+                  type="button"
+                  onClick={() => { setTicker(''); setBuyPoint(''); setStopLoss(''); setQuoteData(null); setAtr(null); setHistoricalData([]); }}
+                  className="px-4 py-3 bg-secondary border border-border rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
                 </button>
@@ -670,7 +682,7 @@ export default function Home() {
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-mono">${pos.positionValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        <button onClick={() => deletePosition(pos.id)} className="p-1 text-muted-foreground hover:text-loss transition-colors">
+                        <button type="button" onClick={() => deletePosition(pos.id)} className="p-1 text-muted-foreground hover:text-loss transition-colors cursor-pointer">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>

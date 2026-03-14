@@ -4,31 +4,44 @@
 
 @layer base {
   :root {
-    --background: 0 0% 8%;
-    --foreground: 0 0% 95%;
-    --card: 0 0% 12%;
-    --card-foreground: 0 0% 95%;
-    --primary: 142 100% 50%;
-    --primary-foreground: 0 0% 8%;
-    --secondary: 0 0% 15%;
-    --secondary-foreground: 0 0% 95%;
-    --muted: 0 0% 18%;
-    --muted-foreground: 0 0% 60%;
-    --accent: 0 0% 22%;
-    --accent-foreground: 0 0% 95%;
-    --destructive: 0 100% 60%;
-    --destructive-foreground: 0 0% 95%;
-    --border: 0 0% 22%;
-    --ring: 142 100% 50%;
+    --background: #141414;
+    --foreground: #e5e5e5;
+    --card: #1c1c1c;
+    --card-foreground: #e5e5e5;
+    --primary: #00ff88;
+    --primary-foreground: #141414;
+    --secondary: #262626;
+    --secondary-foreground: #e5e5e5;
+    --muted: #2d2d2d;
+    --muted-foreground: #999999;
+    --accent: #383838;
+    --accent-foreground: #e5e5e5;
+    --destructive: #ff4d4d;
+    --destructive-foreground: #e5e5e5;
+    --border: #383838;
+    --ring: #00ff88;
+    --profit: #00ff88;
+    --loss: #ff4d4d;
+    --warning: #ffaa00;
+  }
+
+  html, body {
+    background-color: #141414 !important;
+    color: #e5e5e5 !important;
   }
 }
 
-@layer base {
-  * { @apply border-border; }
-  body {
-    @apply bg-background text-foreground;
-    font-feature-settings: "rlig" 1, "calt" 1;
-  }
+* { @apply border-border; }
+
+html {
+  background-color: #141414;
+}
+
+body {
+  background-color: #141414;
+  color: #e5e5e5;
+  font-feature-settings: "rlig" 1, "calt" 1;
+  min-height: 100vh;
 }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -38,6 +51,18 @@
 
 .glow-green { box-shadow: 0 0 20px rgba(0, 255, 136, 0.3); }
 .glow-red { box-shadow: 0 0 20px rgba(255, 77, 77, 0.3); }
+
+.text-profit { color: var(--profit); }
+.text-loss { color: var(--loss); }
+.text-warning { color: var(--warning); }
+
+.bg-profit { background-color: var(--profit); }
+.bg-loss { background-color: var(--loss); }
+.bg-warning { background-color: var(--warning); }
+
+.border-profit { border-color: var(--profit); }
+.border-loss { border-color: var(--loss); }
+.border-warning { border-color: var(--warning); }
 
 /* Hide number input spinners */
 input[type="number"]::-webkit-inner-spin-button,
