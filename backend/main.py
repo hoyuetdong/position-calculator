@@ -61,6 +61,76 @@ def _parse_futu_code(code: str) -> Tuple[str, str]:
         return f"{ticker}.{market}", "STOCK"
 
 
+def _fetch_account_balance(host: str, port: int, trade_pwd: str = "") -> Optional[Dict]:
+    """
+    Fetch account balance from Futu OpenD.
+    Returns balance in USD for US stocks account.
+    """
+    try:
+        import futu
+    except ImportError:
+        raise ImportError("futu-api not installed. Run: pip install futu-api")
+
+    # Use US market to get USD account
+    ctx = futu.OpenSecTradeContext(filter_trdmarket=futu.TrdMarket.US, host=host, port=port)
+    try:
+        if trade_pwd:
+            ret_unlock, _ = ctx.unlock_trade(trade_pwd)
+            if ret_unlock != futu.RET_OK:
+                raise ValueError("unlock_trade failed — check your trading password")
+
+        ret_acc, acc_list = ctx.get_acc_list()
+        if ret_acc != futu.RET_OK:
+            raise ValueError(f"get_acc_list failed: {acc_list}")
+
+        # Find REAL + ACTIVE US account
+        active_us_acc_ids = [
+            int(row["acc_id"])
+            for _, row in acc_list.iterrows()
+            if str(row.get("trd_env", "")).upper() == "REAL"
+            and str(row.get("acc_status", "")).upper() == "ACTIVE"
+            and row.get("acc_type") in [2, "2"]  # US account type
+        ]
+
+        # If no US account, try first active account
+        if not active_us_acc_ids:
+            active_us_acc_ids = [
+                int(row["acc_id"])
+                for _, row in acc_list.iterrows()
+                if str(row.get("trd_env", "")).upper() == "REAL"
+                and str(row.get("acc_status", "")).upper() == "ACTIVE"
+            ]
+
+        print(f"[Futu] Looking for account balance, acc_ids: {active_us_acc_ids}")
+
+        if not active_us_acc_ids:
+            raise ValueError("No REAL+ACTIVE accounts found")
+
+        # Try to get USD balance from first account
+        for acc_id in active_us_acc_ids:
+            ret, data = ctx.accinfo_query(
+                trd_env=futu.TrdEnv.REAL,
+                acc_id=acc_id,
+                currency=futu.Currency.USD,
+                refresh_cache=True,
+            )
+            print(f"[Futu] acc_id={acc_id} accinfo_query ret={ret}")
+            if ret == futu.RET_OK and not data.empty:
+                row = data.iloc[0]
+                return {
+                    "currency": "USD",
+                    "cash": float(row.get("cash", 0) or 0),
+                    "market_value": float(row.get("market_value", 0) or 0),
+                    "total_assets": float(row.get("total_assets", 0) or 0),
+                    "buying_power": float(row.get("buying_power", 0) or 0),
+                    "withdrawable": float(row.get("withdrawable", 0) or 0),
+                }
+
+        return None
+    finally:
+        ctx.close()
+
+
 # Pydantic models
 class Position(BaseModel):
     symbol: str
@@ -74,6 +144,22 @@ class Position(BaseModel):
 class SyncResponse(BaseModel):
     success: bool
     positions: List[Position]
+    message: str
+    timestamp: str
+
+
+class AccountBalance(BaseModel):
+    currency: str
+    cash: float
+    market_value: float
+    total_assets: float
+    buying_power: float
+    withdrawable: float
+
+
+class BalanceResponse(BaseModel):
+    success: bool
+    account_balance: Optional[AccountBalance]
     message: str
     timestamp: str
 
@@ -93,59 +179,66 @@ def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
     except ImportError:
         raise ImportError("futu-api not installed. Run: pip install futu-api")
 
-    # Use HK market - covers HK stocks, can query US too
-    ctx = futu.OpenSecTradeContext(filter_trdmarket=futu.TrdMarket.HK, host=host, port=port)
-    try:
-        if trade_pwd:
-            ret_unlock, _ = ctx.unlock_trade(trade_pwd)
-            if ret_unlock != futu.RET_OK:
-                raise ValueError("unlock_trade failed — check your trading password")
+    # Try both HK and US markets to get all positions
+    all_positions = []
+    
+    for market in [futu.TrdMarket.HK, futu.TrdMarket.US]:
+        print(f"[Futu] Trying market: {market}")
+        ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+        try:
+            if trade_pwd:
+                ret_unlock, _ = ctx.unlock_trade(trade_pwd)
+                if ret_unlock != futu.RET_OK:
+                    raise ValueError("unlock_trade failed — check your trading password")
 
-        ret_acc, acc_list = ctx.get_acc_list()
-        if ret_acc != futu.RET_OK:
-            raise ValueError(f"get_acc_list failed: {acc_list}")
-
-        # Only use REAL + ACTIVE accounts
-        active_acc_ids = [
-            int(row["acc_id"])
-            for _, row in acc_list.iterrows()
-            if str(row.get("trd_env", "")).upper() == "REAL"
-            and str(row.get("acc_status", "")).upper() == "ACTIVE"
-        ]
-        print(f"[Futu] REAL+ACTIVE acc_ids: {active_acc_ids}")
-
-        if not active_acc_ids:
-            raise ValueError("No REAL+ACTIVE accounts found")
-
-        positions = []
-        for acc_id in active_acc_ids:
-            ret, data = ctx.position_list_query(
-                trd_env=futu.TrdEnv.REAL,
-                acc_id=acc_id,
-                refresh_cache=True,
-            )
-            print(f"[Futu] acc_id={acc_id} positions ret={ret}, rows={len(data) if ret == futu.RET_OK else 'ERR'}")
-            if ret != futu.RET_OK or data.empty:
+            ret_acc, acc_list = ctx.get_acc_list()
+            if ret_acc != futu.RET_OK:
+                print(f"[Futu] get_acc_list failed for {market}: {acc_list}")
                 continue
-            for _, row in data.iterrows():
-                qty = float(row.get("qty", 0))
-                if qty <= 0:
+            print(f"[Futu] {market} acc_list: {acc_list.to_dict()}")
+
+            # Only use REAL + ACTIVE accounts
+            active_acc_ids = [
+                int(row["acc_id"])
+                for _, row in acc_list.iterrows()
+                if str(row.get("trd_env", "")).upper() == "REAL"
+                and str(row.get("acc_status", "")).upper() == "ACTIVE"
+            ]
+            print(f"[Futu] {market} REAL+ACTIVE acc_ids: {active_acc_ids}")
+
+            if not active_acc_ids:
+                continue
+
+            for acc_id in active_acc_ids:
+                ret, data = ctx.position_list_query(
+                    trd_env=futu.TrdEnv.REAL,
+                    acc_id=acc_id,
+                    refresh_cache=True,
+                )
+                print(f"[Futu] acc_id={acc_id} positions ret={ret}, rows={len(data) if ret == futu.RET_OK else 'ERR'}")
+                if ret != futu.RET_OK or data.empty:
                     continue
-                code = str(row.get("code", ""))
-                symbol, asset_type = _parse_futu_code(code)
-                cost_price = float(row.get("cost_price", 0) or 0)
-                nominal_price = float(row.get("nominal_price", 0) or 0)
-                positions.append({
-                    "symbol": symbol,
-                    "name": str(row.get("stock_name", symbol)),
-                    "quantity": qty,
-                    "cost_price": cost_price if cost_price > 0 else None,
-                    "current_price": nominal_price if nominal_price > 0 else None,
-                    "asset_type": asset_type,
-                })
-        return positions
-    finally:
-        ctx.close()
+                for _, row in data.iterrows():
+                    qty = float(row.get("qty", 0))
+                    if qty <= 0:
+                        continue
+                    code = str(row.get("code", ""))
+                    symbol, asset_type = _parse_futu_code(code)
+                    cost_price = float(row.get("cost_price", 0) or 0)
+                    nominal_price = float(row.get("nominal_price", 0) or 0)
+                    print(f"[Futu] Position found: {symbol} qty={qty}")
+                    all_positions.append({
+                        "symbol": symbol,
+                        "name": str(row.get("stock_name", symbol)),
+                        "quantity": qty,
+                        "cost_price": cost_price if cost_price > 0 else None,
+                        "current_price": nominal_price if nominal_price > 0 else None,
+                        "asset_type": asset_type,
+                    })
+        finally:
+            ctx.close()
+    
+    return all_positions
 
 
 @app.get("/health")
@@ -186,6 +279,42 @@ def get_positions():
             message=f"Synced {len(positions)} positions",
             timestamp=datetime.utcnow().isoformat(),
         )
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to connect to OpenD at {host}:{port}. Make sure OpenD is running. Error: {e}"
+        )
+
+
+@app.get("/balance", response_model=BalanceResponse)
+def get_account_balance():
+    """
+    Get account balance in USD from Futu/Moomoo US account.
+    """
+    # Get config from environment
+    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    port = int(os.getenv("FUTU_PORT", "11111"))
+    trade_pwd = os.getenv("FUTU_TRADE_PWD", "")
+
+    try:
+        balance = _fetch_account_balance(host, port, trade_pwd)
+        
+        if balance:
+            return BalanceResponse(
+                success=True,
+                account_balance=AccountBalance(**balance),
+                message=f"Account balance fetched",
+                timestamp=datetime.utcnow().isoformat(),
+            )
+        else:
+            return BalanceResponse(
+                success=False,
+                account_balance=None,
+                message="No account balance found",
+                timestamp=datetime.utcnow().isoformat(),
+            )
     except ImportError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:

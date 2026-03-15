@@ -5,12 +5,16 @@ import { NextResponse } from 'next/server'
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000'
 
+// Disable caching - always fetch fresh data
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const response = await fetch(`${PYTHON_API_URL}/positions`, {
       headers: {
         'Content-Type': 'application/json',
       },
+      cache: 'no-store',
     })
 
     if (!response.ok) {

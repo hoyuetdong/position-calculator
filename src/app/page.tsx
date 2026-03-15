@@ -11,7 +11,8 @@ import {
   Settings,
   Info,
   RefreshCw,
-  Database
+  Database,
+  Wallet
 } from 'lucide-react'
 import { 
   getQuote, 
@@ -19,7 +20,7 @@ import {
   type QuoteData,
   type DataSource
 } from '@/lib/yahooAPI'
-import { fetchPositions, type Position as BrokerPosition } from '@/lib/positionsAPI'
+import { fetchPositions, fetchAccountBalance, type Position as BrokerPosition } from '@/lib/positionsAPI'
 import CandlestickChart from '@/components/CandlestickChart'
 
 interface Position {
@@ -134,7 +135,290 @@ function RMultiplierBar({
   )
 }
 
+// Zero-Cost Position Calculator Component
+function ZeroCostCalculator({
+  brokerPositions,
+  syncError,
+  syncing,
+  onSync,
+  onSelectPosition,
+  profitPercent,
+  setProfitPercent,
+  shares,
+  setShares,
+  accountSize
+}: { 
+  brokerPositions: BrokerPosition[]
+  syncError: string | null
+  syncing: boolean
+  onSync: () => void
+  onSelectPosition?: (profitPercent: number, shares: number) => void
+  profitPercent: number
+  setProfitPercent: (value: number) => void
+  shares: string
+  setShares: (value: string) => void
+  accountSize: number
+}) {
+  // Filter for US stocks only (not HK stocks)
+  const usPositions = brokerPositions.filter(pos => !pos.symbol.endsWith('.HK'))
+
+  // 計算總持倉市值
+  const totalPositionValue = usPositions.reduce((sum, p) => {
+    return sum + (p.current_price ? p.current_price * p.quantity : 0)
+  }, 0)
+
+  // 計算持倉佔比
+  const portfolioPercent = accountSize > 0 ? (totalPositionValue / accountSize) * 100 : 0
+
+  // 計算邏輯
+  // Sell Ratio = 1 / (1 + P) where P is profit percentage as decimal
+  // Keep Ratio = 1 - Sell Ratio
+  const profitDecimal = profitPercent / 100
+  const sellRatio = profitDecimal > 0 ? 1 / (1 + profitDecimal) : 1
+  const keepRatio = 1 - sellRatio
+
+  // 如果有輸入持股數
+  const sharesNum = parseInt(shares) || 0
+  const sharesToSell = sharesNum > 0 ? Math.round(sharesNum * sellRatio) : 0
+  const zeroCostShares = sharesNum > 0 ? sharesNum - sharesToSell : 0
+
+  // 格式化數字
+  const formatNumber = (num: number) => num.toLocaleString()
+
+  return (
+    <div className="max-w-6xl mx-auto">
+      {/* Main Content - Two independent Cards side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+        
+        {/* Left Column - Calculator Card */}
+        <div className="bg-card border border-border rounded-xl p-6 md:p-8 flex flex-col">
+          <h2 className="text-2xl font-bold mb-6 flex items-center gap-3">
+            <Wallet className="w-7 h-7 text-primary" />
+            零成本持倉計算器
+          </h2>
+
+          {/* 輸入區 */}
+          <div className="space-y-6 mb-8">
+            {/* 盈利百分比輸入 */}
+            <div>
+              <label className="text-sm text-muted-foreground mb-2 block">盈利百分比 (Profit %)</label>
+              <div className="flex items-center gap-4">
+                <input
+                  type="number"
+                  value={profitPercent}
+                  onChange={(e) => setProfitPercent(Math.min(500, Math.max(0, parseFloat(e.target.value) || 0)))}
+                  className="w-24 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-xl font-mono text-center"
+                  min="0"
+                  max="500"
+                />
+                <span className="text-xl text-muted-foreground">%</span>
+              </div>
+              {/* Slider */}
+              <input
+                type="range"
+                min="0"
+                max="500"
+                value={profitPercent}
+                onChange={(e) => setProfitPercent(parseInt(e.target.value))}
+                className="w-full mt-4 h-2 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary"
+              />
+            </div>
+
+            {/* 持股數量輸入 */}
+            <div>
+              <label className="text-sm text-muted-foreground mb-2 block">持股數量 (選填)</label>
+              <input
+                type="number"
+                value={shares}
+                onChange={(e) => setShares(e.target.value)}
+                placeholder="例如: 1000"
+                className="w-full px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
+                min="0"
+              />
+            </div>
+          </div>
+
+          {/* 輸出區 - 大字展示 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            {/* Card 1: 賣出比例 */}
+            <div className="bg-card border-2 border-warning/50 rounded-xl p-6 text-center">
+              <p className="text-muted-foreground mb-2">需要賣出比例</p>
+              <p className="text-5xl font-bold text-warning glow-warning">{(sellRatio * 100).toFixed(2)}%</p>
+              <p className="text-sm text-muted-foreground mt-2">收回本金</p>
+            </div>
+
+            {/* Card 2: 保留比例 */}
+            <div className="bg-card border-2 border-profit/50 rounded-xl p-6 text-center">
+              <p className="text-muted-foreground mb-2">零成本持股比例</p>
+              <p className="text-5xl font-bold text-profit glow-green">{(keepRatio * 100).toFixed(2)}%</p>
+              <p className="text-sm text-muted-foreground mt-2">純利潤倉位</p>
+            </div>
+          </div>
+
+          {/* 進度條 */}
+          <div className="mb-6">
+            <div className="flex justify-between text-sm mb-2">
+              <span className="text-warning font-medium">賣出 {(sellRatio * 100).toFixed(1)}%</span>
+              <span className="text-profit font-medium">保留 {(keepRatio * 100).toFixed(1)}%</span>
+            </div>
+            <div className="h-4 bg-secondary rounded-full overflow-hidden flex">
+              <div 
+                className="h-full bg-warning transition-all duration-300"
+                style={{ width: `${sellRatio * 100}%` }}
+              />
+              <div 
+                className="h-full bg-profit transition-all duration-300"
+                style={{ width: `${keepRatio * 100}%` }}
+              />
+            </div>
+          </div>
+
+          {/* 動態文字提示 */}
+          {sharesNum > 0 && (
+            <div className="bg-secondary/50 rounded-lg p-4 text-center">
+              <p className="text-lg">
+                假設你持有 <span className="text-primary font-bold">{formatNumber(sharesNum)}</span> 股，
+                你需要賣出約 <span className="text-warning font-bold">{formatNumber(sharesToSell)}</span> 股來收回全部本金，
+                剩下的 <span className="text-profit font-bold">{formatNumber(zeroCostShares)}</span> 股就係你嘅零成本持股。
+              </p>
+            </div>
+          )}
+
+          {/* 計算公式說明 */}
+          <div className="mt-6 pt-6 border-t border-border">
+            <p className="text-xs text-muted-foreground text-center">
+              公式：賣出比例 = 1 ÷ (1 + 盈利%) · 保留比例 = 1 - 賣出比例
+            </p>
+          </div>
+        </div>
+
+        {/* Right Column - US Positions Card */}
+        <div className="bg-card border border-border rounded-xl p-6 flex flex-col h-full">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Database className="w-5 h-5 text-primary" />
+              富途美股持倉
+            </h3>
+          </div>
+          
+          {usPositions.length > 0 ? (
+            <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+              {/* 按盈亏百分比由高至低排序 */}
+              {usPositions
+                .map((pos, idx) => {
+                  // Calculate profit/loss if we have both cost and current price
+                  const hasPL = pos.cost_price && pos.current_price
+                  const plPercent = hasPL 
+                    ? ((pos.current_price! - pos.cost_price!) / pos.cost_price! * 100)
+                    : -999 // 没有价格数据排最后
+                  const isProfit = plPercent >= 0
+                  
+                  // 计算零成本需卖出股数 (只对盈利股票计算)
+                  const sharesToSell = isProfit && hasPL 
+                    ? Math.round(pos.quantity * (1 / (1 + plPercent / 100)))
+                    : 0
+                  const zeroCostShares = isProfit && hasPL 
+                    ? pos.quantity - sharesToSell
+                    : 0
+                  
+                  return { pos, idx, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }
+                })
+                .sort((a, b) => b.plPercent - a.plPercent)
+                .map(({ pos, idx, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }) => {
+                  return (
+                    <div 
+                      key={idx} 
+                      className="flex items-center justify-between px-4 py-3 mb-2 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
+                      onClick={() => {
+                        // 点击填充到左边计算器
+                        if (hasPL && plPercent > 0 && onSelectPosition) {
+                          onSelectPosition(Math.round(plPercent * 10) / 10, pos.quantity)
+                        }
+                      }}
+                    >
+                      {/* 左侧：股票代号 + 持股数量 */}
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold text-white text-base">{pos.symbol}</span>
+                        <span className="text-sm text-gray-500">{pos.quantity} 股</span>
+                      </div>
+                      
+                      {/* 右侧：零成本信息 + 盈亏 */}
+                      {hasPL && (
+                        <div className="flex items-center gap-4">
+                          {/* 盈利且有正数才显示零成本信息 */}
+                          {isProfit && plPercent > 0 && (
+                            <span className="text-xs text-warning">
+                              零成本需賣出: <span className="font-bold">{sharesToSell.toLocaleString()}</span> 股
+                              <span className="text-muted-foreground ml-1">(剩: <span className="text-profit font-bold">{zeroCostShares.toLocaleString()}</span>)</span>
+                            </span>
+                          )}
+                          {/* 亏损股票只显示红色盈亏 */}
+                          <span className={`text-base font-bold ${isProfit ? 'text-profit' : 'text-loss'}`}>
+                            {isProfit ? '+' : ''}{plPercent.toFixed(1)}%
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              
+              {/* Total summary - 持倉佔比 */}
+              <div className="mt-4 pt-4 border-t border-border">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-muted-foreground">持倉佔比:</span>
+                  <span className="font-mono font-bold">
+                    {portfolioPercent.toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              {syncError ? (
+                <>
+                  <p className="text-loss">同步失敗</p>
+                  <p className="text-xs mt-1 text-loss/70">{syncError}</p>
+                  <button
+                    type="button"
+                    onClick={() => { 
+                      console.log('Sync button clicked, calling onSync'); 
+                      onSync(); 
+                    }}
+                    disabled={syncing}
+                    className="mt-3 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 text-sm cursor-pointer"
+                  >
+                    {syncing ? '同步緊...' : '同步券商持倉'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p>暫時未有美股持倉</p>
+                  <button
+                    type="button"
+                    onClick={() => { console.log('Sync button clicked'); onSync(); }}
+                    disabled={syncing}
+                    className="mt-3 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 text-sm cursor-pointer"
+                  >
+                    {syncing ? '同步緊...' : '同步券商持倉'}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        
+      </div>
+    </div>
+  )
+}
+
 export default function Home() {
+  // Force dark mode on client to prevent flash
+  useEffect(() => {
+    document.documentElement.classList.add('dark')
+  }, [])
+
   const [settings, setSettings] = useState<Settings>({
     accountSize: 100000,
     defaultRiskPercent: 0.3,
@@ -185,6 +469,47 @@ export default function Home() {
   const [brokerPositions, setBrokerPositions] = useState<BrokerPosition[]>([])
   const [syncing, setSyncing] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null)
+  const [syncError, setSyncError] = useState<string | null>(null)
+  
+  // Account balance state
+  const [balanceLastUpdated, setBalanceLastUpdated] = useState<string | null>(null)
+  const [syncingBalance, setSyncingBalance] = useState(false)
+  
+  // Tab navigation state
+  const [activeTab, setActiveTab] = useState<'position' | 'zerocost'>('position')
+  
+  // Zero-Cost Calculator state (controlled by parent)
+  const [profitPercentLocal, setProfitPercentLocal] = useState<number>(35)
+  const [sharesLocal, setSharesLocal] = useState<string>('')
+  
+  // Sync positions from broker
+  const syncBrokerPositions = useCallback(async () => {
+    console.log('[Sync] Starting broker sync...')
+    setSyncing(true)
+    setSyncError(null)
+    try {
+      const response = await fetchPositions()
+      console.log('[Sync] Response:', response)
+      if (response.success) {
+        setBrokerPositions(response.positions)
+        setLastSyncTime(response.timestamp)
+      } else {
+        console.error('Sync failed:', response.message)
+        setSyncError(response.message)
+      }
+    } catch (error) {
+      console.error('Failed to sync positions:', error)
+      setSyncError(String(error))
+    }
+    setSyncing(false)
+  }, [])
+  
+  // Auto-sync broker positions on page load
+  useEffect(() => {
+    if (hydrated && brokerPositions.length === 0 && !syncing) {
+      syncBrokerPositions()
+    }
+  }, [hydrated, syncBrokerPositions])
   
   // Handle chart click - set buy price and auto-calculate stop loss
   const handleChartClick = useCallback((price: number) => {
@@ -231,6 +556,11 @@ export default function Home() {
     const fetchData = async () => {
       if (ticker.length >= 1) {
         setLoading(true)
+        
+        // Reset buy price and stop loss when ticker changes
+        setBuyPoint('')
+        setStopLoss('')
+        
         try {
           const quote = await getQuote(ticker, dataSource)
           const klines = await getHistoricalKLines(ticker, chartDays, dataSource)
@@ -261,8 +591,8 @@ export default function Home() {
           }
           setAtr(calculatedAtr)
           
-          // Auto-fill buy point with current price if empty
-          if (!buyPoint && quote.lastPrice) {
+          // Auto-fill buy point with current price
+          if (quote.lastPrice) {
             setBuyPoint(quote.lastPrice.toFixed(2))
           }
         } catch (error) {
@@ -335,32 +665,100 @@ export default function Home() {
     setLoading(false)
   }
   
-  // Sync positions from broker
-  const syncBrokerPositions = async () => {
-    setSyncing(true)
+  // Sync account balance from broker
+  const syncAccountBalance = useCallback(async () => {
+    setSyncingBalance(true)
     try {
-      const response = await fetchPositions()
-      if (response.success) {
-        setBrokerPositions(response.positions)
-        setLastSyncTime(response.timestamp)
+      const response = await fetchAccountBalance()
+      if (response.success && response.account_balance) {
+        const balance = response.account_balance
+        // Update settings with the balance
+        setSettings(prev => {
+          const newSettings = {
+            ...prev,
+            accountSize: balance.total_assets || balance.cash || prev.accountSize
+          }
+          // Save to localStorage
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('vcp-settings', JSON.stringify(newSettings))
+            // Also save balance update timestamp
+            localStorage.setItem('vcp-balance-last-updated', new Date().toISOString())
+          }
+          return newSettings
+        })
+        setBalanceLastUpdated(response.timestamp)
       } else {
-        console.error('Sync failed:', response.message)
+        console.error('Balance sync failed:', response.message)
       }
     } catch (error) {
-      console.error('Failed to sync positions:', error)
+      console.error('Failed to sync account balance:', error)
     }
-    setSyncing(false)
-  }
+    setSyncingBalance(false)
+  }, [])
+  
+  // Check if balance needs update (once per day, after 4:30 PM EST = 9:30 PM UTC = 21:30 UTC)
+  // Or if never updated before
+  useEffect(() => {
+    if (!hydrated) return
+    
+    const lastUpdated = localStorage.getItem('vcp-balance-last-updated')
+    const now = new Date()
+    
+    // Check if we need to update: 
+    // 1. Never updated
+    // 2. Last update was yesterday or earlier
+    if (!lastUpdated) {
+      syncAccountBalance()
+      return
+    }
+    
+    const lastDate = new Date(lastUpdated)
+    const isDifferentDay = lastDate.toDateString() !== now.toDateString()
+    
+    // Also check if market is closed (after 9:30 PM UTC = 4:30 PM EST)
+    const marketClosedHour = 21 // 9:30 PM UTC
+    const isMarketClosed = now.getUTCHours() >= marketClosedHour
+    
+    if (isDifferentDay && isMarketClosed) {
+      // Today's market is closed, fetch new balance
+      syncAccountBalance()
+    }
+  }, [hydrated, syncAccountBalance])
   
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Calculator className="w-6 h-6 text-primary" />
-            <h1 className="text-xl font-bold">VCP Position Calculator</h1>
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+          {/* Tab Navigation */}
+          <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('position')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-2 ${
+                activeTab === 'position' 
+                  ? 'bg-primary text-primary-foreground' 
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Calculator className="w-4 h-4" />
+              Position Calculator
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('zerocost')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-2 ${
+                activeTab === 'zerocost' 
+                  ? 'bg-primary text-primary-foreground' 
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Wallet className="w-4 h-4" />
+              Zero-Cost Calculator
+            </button>
           </div>
+          
+          {/* Right side controls */}
           <div className="flex items-center gap-3">
             {/* Data Source Toggle */}
             <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
@@ -408,22 +806,26 @@ export default function Home() {
                 <RefreshCw className="w-5 h-5" />
               </button>
             )}
+            {/* Broker Sync Button */}
+            <button
+              type="button"
+              onClick={() => { 
+                console.log('Header sync button clicked!'); 
+                alert('Click detect!');
+                syncBrokerPositions(); 
+              }}
+              disabled={syncing}
+              className="p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer disabled:opacity-50"
+              title="同步持倉"
+            >
+              <RefreshCw className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} />
+            </button>
             <button 
               type="button"
               onClick={() => setShowSettings(!showSettings)}
               className="p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
             >
               <Settings className="w-5 h-5" />
-            </button>
-            {/* Broker Sync Button */}
-            <button 
-              type="button"
-              onClick={syncBrokerPositions}
-              disabled={syncing}
-              className="p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer disabled:opacity-50"
-              title="同步持倉"
-            >
-              <RefreshCw className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
@@ -434,13 +836,34 @@ export default function Home() {
         <div className="border-b border-border bg-card/30">
           <div className="max-w-6xl mx-auto px-4 py-4 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="text-sm text-muted-foreground">Account Size ($)</label>
-              <input
-                type="number"
-                value={settings.accountSize}
-                onChange={(e) => setSettings({ ...settings, accountSize: parseFloat(e.target.value) || 0 })}
-                className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-              />
+              <label className="text-sm text-muted-foreground flex items-center gap-2">
+                Account Size ($)
+                <button 
+                  type="button"
+                  onClick={syncAccountBalance}
+                  disabled={syncingBalance}
+                  className="p-1 rounded hover:bg-secondary/50 transition-colors cursor-pointer disabled:opacity-50"
+                  title="從富途同步美元帳戶餘額"
+                >
+                  <RefreshCw className={`w-3 h-3 ${syncingBalance ? 'animate-spin' : ''}`} />
+                </button>
+              </label>
+              <div className="flex gap-2 items-center">
+                <input
+                  type="number"
+                  value={settings.accountSize}
+                  onChange={(e) => setSettings({ ...settings, accountSize: parseFloat(e.target.value) || 0 })}
+                  className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              {balanceLastUpdated && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  餘額更新: {new Date(balanceLastUpdated).toLocaleString()}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground mt-1">
+                每日美股收市後自動更新
+              </p>
             </div>
             <div>
               <label className="text-sm text-muted-foreground">Default Risk %</label>
@@ -476,9 +899,11 @@ export default function Home() {
       )}
       
       <main className="max-w-6xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Tab Content */}
+        {activeTab === 'position' ? (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-stretch">
           {/* Input Section */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="lg:col-span-2 space-y-6 flex flex-col">
             {/* Quote Info Card */}
             {quoteData && (
               <div className="bg-card border border-border rounded-xl p-4">
@@ -695,7 +1120,7 @@ export default function Home() {
           </div>
           
           {/* Results Section */}
-          <div className="space-y-6">
+          <div className="space-y-6 flex flex-col h-full">
             {/* Main Result */}
             <div className="bg-card border border-border rounded-xl p-6 text-center">
               <p className="text-muted-foreground mb-2">應買股數</p>
@@ -781,38 +1206,27 @@ export default function Home() {
               </div>
             )}
 
-            {/* Broker Positions */}
-            {brokerPositions.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold">券商持倉</h3>
-                  {lastSyncTime && (
-                    <span className="text-xs text-muted-foreground">
-                      同步: {new Date(lastSyncTime).toLocaleTimeString()}
-                    </span>
-                  )}
-                </div>
-                <div className="space-y-3 max-h-64 overflow-y-auto">
-                  {brokerPositions.map((pos, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg">
-                      <div>
-                        <span className="font-bold text-primary">{pos.symbol}</span>
-                        <p className="text-xs text-muted-foreground">
-                          {pos.quantity} 股 {pos.cost_price ? `@ $${pos.cost_price.toFixed(2)}` : ''}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        {pos.current_price && (
-                          <span className="text-sm font-mono">${pos.current_price.toFixed(2)}</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
+        ) : (
+          /* Zero-Cost Calculator Tab */
+          <ZeroCostCalculator 
+            brokerPositions={brokerPositions} 
+            syncError={syncError}
+            syncing={syncing}
+            onSync={syncBrokerPositions}
+            onSelectPosition={(profitPercent, shares) => {
+              // 填充到左边计算器
+              setProfitPercentLocal(profitPercent)
+              setSharesLocal(shares.toString())
+            }}
+            profitPercent={profitPercentLocal}
+            setProfitPercent={setProfitPercentLocal}
+            shares={sharesLocal}
+            setShares={setSharesLocal}
+            accountSize={settings.accountSize}
+          />
+        )}
       </main>
     </div>
   )

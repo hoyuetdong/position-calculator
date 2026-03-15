@@ -1,42 +1,16 @@
 /**
  * Futu OpenD API Client
  * 連接富途 OpenD 獲取股票報價同歷史數據
+ * 
+ * 注意：futu-api 有啲 native 依賴問題，所以用 dynamic import
+ * 如果 init 失敗，會 graceful fallback 到 error
  */
-
-import protoRoot from 'futu-api/proto.js';
-
-const QotMarket = {
-  QotMarket_Unknown: 0,
-  QotMarket_HK_Security: 1,
-  QotMarket_HK_Future: 2,
-  QotMarket_US_Security: 11,
-  QotMarket_CNSH_Security: 21,
-  QotMarket_CNSZ_Security: 22,
-};
-
-const KLineType = {
-  KLineType_Unknown: 0,
-  KLineType_1Min: 1,
-  KLineType_5Min: 2,
-  KLineType_15Min: 3,
-  KLineType_30Min: 4,
-  KLineType_1Hour: 5,
-  KLineType_1Day: 6,
-  KLineType_1Week: 7,
-  KLineType_1Month: 8,
-};
-
-// Futu OpenD 配置
-const FUTU_CONFIG = {
-  ip: process.env.FUTU_HOST || '127.0.0.1',
-  port: parseInt(process.env.FUTU_WS_PORT || '33333', 10),  // WebSocket port (default 33333)
-  apiPort: parseInt(process.env.FUTU_PORT || '11111', 10),   // API port (11111)
-};
 
 let futuInstance: any = null;
 let isConnected = false;
 let loginResolve: ((value: void) => void) | null = null;
 let loginReject: ((reason?: any) => void) | null = null;
+let initAttempted = false;
 
 /**
  * 港股代號轉換
@@ -50,7 +24,7 @@ function toFutuSecurity(symbol: string): { market: number; code: string } {
   // 美股 (e.g., AAPL, TSLA, NVDA)
   if (/^[A-Z]{1,5}$/.test(upper)) {
     return {
-      market: QotMarket.QotMarket_US_Security,
+      market: 11, // QotMarket_US_Security
       code: upper,
     }
   }
@@ -65,26 +39,57 @@ function toFutuSecurity(symbol: string): { market: number; code: string } {
   }
   
   return {
-    market: QotMarket.QotMarket_HK_Security,
+    market: 1, // QotMarket_HK_Security
     code,
   };
 }
 
 /**
  * 初始化 Futu OpenD 連接
+ * 使用 dynamic import 避免 startup 時 module loading error
  */
 export async function initFutuAPI(): Promise<void> {
+  // Futu OpenD 配置
+  const FUTU_CONFIG = {
+    ip: process.env.FUTU_HOST || '127.0.0.1',
+    port: parseInt(process.env.FUTU_WS_PORT || '33333', 10),
+    apiPort: parseInt(process.env.FUTU_PORT || '11111', 10),
+  };
+  
+  // 如果已經 init 過，直接返回
   if (futuInstance && isConnected) {
     return;
   }
+
+  // 如果 init 已經失敗過，唔好重試
+  if (initAttempted && !isConnected) {
+    throw new Error('Futu API 初始化失敗，請重啟 server');
+  }
+
+  initAttempted = true;
 
   return new Promise(async (resolve, reject) => {
     loginResolve = resolve;
     loginReject = reject;
     
     try {
-      const Futu = (await import('futu-api')).default;
+      // Dynamic import - 呢個先會 trigger memcpy error
+      // 如果呢度 fail，會 catch 住唔會 block 成個 app
+      const { default: Futu } = await import('futu-api');
       console.log('[FutuAPI] Futu class loaded');
+      
+      // Define constants after import
+      const QotMarket = {
+        QotMarket_Unknown: 0,
+        QotMarket_HK_Security: 1,
+        QotMarket_HK_Future: 2,
+        QotMarket_US_Security: 11,
+        QotMarket_CNSH_Security: 21,
+        QotMarket_CNSZ_Security: 22,
+      };
+      
+      // Store QotMarket for later use
+      (globalThis as any).futuQotMarket = QotMarket;
       
       futuInstance = new Futu();
       console.log('[FutuAPI] Instance created');
@@ -203,7 +208,7 @@ export async function getQuote(symbol: string): Promise<{
     const low52w = basic.lowest52WeeksPrice || basic.low52w || 0;
 
     return {
-      symbol: security.market === QotMarket.QotMarket_US_Security 
+      symbol: security.market === 11 // US market 
         ? security.code 
         : `${security.code}.HK`,
       name: basic.name || security.code,
