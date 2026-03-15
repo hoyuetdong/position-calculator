@@ -36,20 +36,70 @@ npm run dev
 
 打開瀏覽器訪問：`http://localhost:3000`
 
-### 4. (可選) 啟動 Backend
+---
 
-如果要用富途數據，需要同時啟動 backend：
+## Docker 部署 (VPS / 伺服器)
+
+### 準備環境
 
 ```bash
-# 停咗兩個 service
-kill $(lsof -t -i:3000) 2>/dev/null
-kill $(lsof -t -i:8000) 2>/dev/null
+# 確保 Docker 同 docker-compose 已安裝
+docker --version
+docker-compose --version
+```
 
-# 啟動 backend (放後台)
-cd /Users/mac/Desktop/hoyuetdong/algo/position-calculator/backend && python3 main.py &
+### 配置 .env
 
-# 啟動 frontend
-cd /Users/mac/Desktop/hoyuetdong/algo/position-calculator && npm run dev
+```bash
+cp .env.example .env
+nano .env
+```
+
+填入以下必要變數：
+```
+FUTU_LOGIN_ACCOUNT=你的富途ID
+FUTU_LOGIN_PWD_MD5=密碼既MD5
+FUTU_TRADE_PWD=你的交易密碼
+```
+
+### 啟動所有服務
+
+```bash
+# 構建並啟動所有 containers
+docker-compose up -d
+
+# 查看所有 services 狀態
+docker-compose ps
+
+# 查看日誌
+docker-compose logs -f
+```
+
+### 服務架構
+
+| Service | Port | Description |
+|---------|------|-------------|
+| futuopend | 11111, 11112, 8081 | 富途行情網關 |
+| backend | 8000 | Python FastAPI (止蝕邏輯) |
+| vcp-calculator | 3000 | Next.js 前端 |
+
+### 驗證部署
+
+```bash
+# 1. 檢查 futuopend 連線
+curl http://localhost:8081/status
+
+# 2. 檢查 backend API
+curl http://localhost:8000/positions
+
+# 3. 訪問網頁
+# http://你的VPS-IP:3000
+```
+
+### 停止服務
+
+```bash
+docker-compose down
 ```
 
 ---

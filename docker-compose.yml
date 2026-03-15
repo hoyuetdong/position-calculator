@@ -25,7 +25,26 @@ services:
     networks:
       - vcp-network
 
-  # Web應用
+  # Python Backend (止蝕邏輯 + 持倉同步)
+  backend:
+    build: ./backend
+    container_name: vcp-backend
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - FUTU_HOST=futuopend
+      - FUTU_PORT=11111
+      - FUTU_TRADE_PWD=${FUTU_TRADE_PWD}
+      - PORT=8000
+    depends_on:
+      - futuopend
+    restart: unless-stopped
+    networks:
+      - vcp-network
+    volumes:
+      - backend_data:/app
+
+  # Web應用 (Next.js Frontend)
   vcp-calculator:
     build: .
     container_name: vcp-calculator
@@ -33,16 +52,18 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      - PYTHON_API_URL=http://backend:8000
       - FUTU_HOST=futuopend
       - FUTU_PORT=11111
     depends_on:
-      - futuopend
+      - backend
     restart: unless-stopped
     networks:
       - vcp-network
 
 volumes:
   futuopend_data:
+  backend_data:
 
 networks:
   vcp-network:
