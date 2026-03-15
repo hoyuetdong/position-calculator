@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    
+
     // Forward to Python backend
-    const backendUrl = process.env.BACKEND_URL || 'http://127.0.0.1:8000'
-    const response = await fetch(`${backendUrl}/order`, {
+    const backendUrl = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+    const response = await fetchWithTimeout(`${backendUrl}/order`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -26,9 +27,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result)
   } catch (error) {
     console.error('Order API error:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    const statusCode = errorMessage.includes('timeout') ? 504 : 500
     return NextResponse.json(
-      { success: false, message: 'Internal server error' },
-      { status: 500 }
+      { success: false, message: errorMessage },
+      { status: statusCode }
     )
   }
 }

@@ -1,14 +1,10 @@
 import { NextResponse } from 'next/server'
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout'
 
 export async function GET() {
   try {
-    const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000'
-    const response = await fetch(`${backendUrl}/balance`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    })
+    const backendUrl = process.env.PYTHON_API_URL || 'http://localhost:8000'
+    const response = await fetchWithTimeout(`${backendUrl}/balance`)
 
     if (!response.ok) {
       const error = await response.json()
@@ -20,11 +16,13 @@ export async function GET() {
 
     const data = await response.json()
     return NextResponse.json(data)
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Balance API error:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    const statusCode = errorMessage.includes('timeout') ? 504 : 500
     return NextResponse.json(
-      { success: false, account_balance: null, message: error.message || 'Internal server error', timestamp: new Date().toISOString() },
-      { status: 500 }
+      { success: false, account_balance: null, message: errorMessage, timestamp: new Date().toISOString() },
+      { status: statusCode }
     )
   }
 }

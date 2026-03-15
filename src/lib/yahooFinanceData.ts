@@ -1,11 +1,9 @@
 /**
  * Yahoo Finance Data Engine
- * 使用 yahoo-finance2 獲取股票報價同歷史數據
+ * 直接用 HTTP API 獲取股票報價同歷史數據
  */
 
-import YahooFinance from 'yahoo-finance2'
-
-const yahooFinance = new YahooFinance()
+import { calculateSMA, calculateEMA } from './indicators'
 
 export interface YahooQuote {
   symbol: string
@@ -36,40 +34,68 @@ export interface YahooKLine {
  */
 function normalizeSymbol(symbol: string): string {
   const upper = symbol.toUpperCase().trim()
-  
+
   if (upper.includes('.') || upper.startsWith('^')) {
     return upper
   }
-  
+
   if (/^\d+$/.test(upper)) {
     return `${upper}.HK`
   }
-  
+
   return upper
 }
 
 /**
- * 獲取股票報價
+ * 獲取股票報價 - 用 Yahoo Finance v8 API
  */
 export async function getYahooQuote(symbol: string): Promise<YahooQuote> {
   const normalized = normalizeSymbol(symbol)
-  
+  console.log('[YahooAPI] Fetching quote for:', normalized)
+
   try {
-    const quote: any = await yahooFinance.quote(normalized)
-    
+    const response = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${normalized}?interval=1d&range=1d`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+        },
+      }
+    )
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+    const result = data?.chart?.result?.[0]
+
+    if (!result) {
+      throw new Error(`No data found for symbol: ${normalized}`)
+    }
+
+    const meta = result.meta
+    const quote = result.indicators?.quote?.[0] || {}
+
+    // 計算 change 從 previous close
+    const regularMarketPrice = meta.regularMarketPrice || 0
+    const previousClose = meta.chartPreviousClose || meta.previousClose || 0
+    const change = regularMarketPrice - previousClose
+    const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0
+
     return {
       symbol: normalized,
-      name: quote.shortName || quote.longName || normalized,
-      lastPrice: quote.regularMarketPrice || 0,
-      open: quote.regularMarketOpen || 0,
-      high: quote.regularMarketDayHigh || 0,
-      low: quote.regularMarketDayLow || 0,
-      volume: quote.regularMarketVolume || 0,
+      name: meta.shortName || meta.symbol || normalized,
+      lastPrice: regularMarketPrice,
+      open: meta.chartOpening || 0,
+      high: meta.regularMarketDayHigh || 0,
+      low: meta.regularMarketDayLow || 0,
+      volume: meta.regularMarketVolume || 0,
       turnover: 0,
-      change: quote.regularMarketChange || 0,
-      changePercent: (quote.regularMarketChangePercent || 0),
-      high52w: quote.fiftyTwoWeekHigh || 0,
-      low52w: quote.fiftyTwoWeekLow || 0,
+      change: change,
+      changePercent: changePercent,
+      high52w: meta.fiftyTwoWeekHigh || 0,
+      low52w: meta.fiftyTwoWeekLow || 0,
     }
   } catch (error) {
     console.error('[YahooAPI] Quote error:', error)
@@ -78,64 +104,61 @@ export async function getYahooQuote(symbol: string): Promise<YahooQuote> {
 }
 
 /**
- * 獲取歷史K線數據
+ * 獲取歷史K線數據 - 用 Yahoo Finance v8 API
  */
 export async function getYahooKLines(
   symbol: string,
   days: number = 30
 ): Promise<YahooKLine[]> {
   const normalized = normalizeSymbol(symbol)
-  
+  console.log('[YahooAPI] Fetching K-lines for:', normalized, 'days:', days)
+
   try {
-    const endDate = new Date()
-    const startDate = new Date()
-    startDate.setDate(startDate.getDate() - days)
-    
-    const history: any = await yahooFinance.historical(normalized, {
-      period1: startDate,
-      period2: endDate,
-      interval: '1d',
-    })
-    
-    if (!Array.isArray(history) || history.length === 0) {
+    const range = days <= 7 ? '5d' :
+                  days <= 30 ? '1mo' :
+                  days <= 90 ? '3mo' :
+                  days <= 180 ? '6mo' :
+                  days <= 365 ? '1y' :
+                  days <= 730 ? '2y' : '5y'
+
+    const response = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${normalized}?interval=1d&range=${range}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+        },
+      }
+    )
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+    const result = data?.chart?.result?.[0]
+
+    if (!result || !result.timestamp || result.timestamp.length === 0) {
       return []
     }
-    
-    return history.map((item) => ({
-      time: Math.floor(item.date.getTime() / 1000),
-      open: item.open,
-      high: item.high,
-      low: item.low,
-      close: item.close,
-      volume: item.volume,
+
+    const timestamps = result.timestamp
+    const quotes = result.indicators?.quote?.[0] || {}
+
+    const klines: YahooKLine[] = timestamps.map((time: number, i: number) => ({
+      time,
+      open: quotes.open?.[i] || 0,
+      high: quotes.high?.[i] || 0,
+      low: quotes.low?.[i] || 0,
+      close: quotes.close?.[i] || 0,
+      volume: quotes.volume?.[i] || 0,
     }))
+
+    // Filter out invalid entries
+    return klines.filter(k => k.close > 0)
   } catch (error) {
     console.error('[YahooAPI] KLines error:', error)
     throw error
   }
-}
-
-/**
- * 計算移動平均線
- */
-function calculateSMA(data: number[], period: number): number | null {
-  if (data.length < period) return null
-  const slice = data.slice(-period)
-  return slice.reduce((a, b) => a + b, 0) / period
-}
-
-function calculateEMA(data: number[], period: number): number | null {
-  if (data.length < period) return null
-  
-  const initialSlice = data.slice(0, period)
-  let ema = initialSlice.reduce((a, b) => a + b, 0) / period
-  
-  const multiplier = 2 / (period + 1)
-  
-  for (let i = period; i < data.length; i++) {
-    ema = (data[i] - ema) * multiplier + ema
-  }
-  return ema
 }
 
 /**
@@ -148,15 +171,15 @@ export async function getYahooQuoteWithMA(symbol: string): Promise<YahooQuote & 
   sma200: number | null
 }> {
   const quote = await getYahooQuote(symbol)
-  
+
   let ema10: number | null = null
   let ema20: number | null = null
   let sma50: number | null = null
   let sma200: number | null = null
-  
+
   try {
     const klines = await getYahooKLines(symbol, 2000)
-    
+
     if (klines.length > 0) {
       const closes = klines.map((k) => k.close).filter((c) => c > 0)
       ema10 = calculateEMA(closes, 10)
@@ -167,7 +190,7 @@ export async function getYahooQuoteWithMA(symbol: string): Promise<YahooQuote & 
   } catch (err) {
     console.error('[YahooAPI] MA calculation error:', err)
   }
-  
+
   return {
     ...quote,
     ema10,

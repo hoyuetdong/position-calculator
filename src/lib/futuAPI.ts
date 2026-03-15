@@ -1,10 +1,12 @@
 /**
  * Futu OpenD API Client
  * 連接富途 OpenD 獲取股票報價同歷史數據
- * 
+ *
  * 注意：futu-api 有啲 native 依賴問題，所以用 dynamic import
  * 如果 init 失敗，會 graceful fallback 到 error
  */
+
+import { calculateSMA, calculateEMA } from './indicators'
 
 let futuInstance: any = null;
 let isConnected = false;
@@ -308,32 +310,6 @@ export async function getHistoricalKLines(
     console.error('[FutuAPI] getHistoricalKLines error:', err);
     throw err;
   }
-}
-
-/**
- * 計算 SMA
- */
-function calculateSMA(data: number[], period: number): number | null {
-  if (data.length < period) return null;
-  const slice = data.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
-}
-
-/**
- * 計算 EMA
- */
-function calculateEMA(data: number[], period: number): number | null {
-  if (data.length < period) return null;
-
-  const initialSlice = data.slice(0, period);
-  let ema = initialSlice.reduce((a, b) => a + b, 0) / period;
-
-  const multiplier = 2 / (period + 1);
-
-  for (let i = period; i < data.length; i++) {
-    ema = (data[i] - ema) * multiplier + ema;
-  }
-  return ema;
 }
 
 /**

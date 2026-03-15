@@ -12,14 +12,13 @@ Environment variables:
   PORT — API server port (default: 8000)
 """
 import os
-import json
 import httpx
 import threading
 import time
 from typing import List, Dict, Tuple, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 
 _HKD_USD_FALLBACK = 1 / 7.78
 
@@ -27,7 +26,6 @@ _HKD_USD_FALLBACK = 1 / 7.78
 # ============================================================================
 # 非同步止蝕單管理系統 (持久化版本)
 # ============================================================================
-import json
 from pathlib import Path
 
 # 定義數據儲存檔案路徑
@@ -93,15 +91,16 @@ def _save_pending_stops_to_file() -> None:
 
 
 def _init_pending_stops_from_file() -> None:
-    """初始化時由 file load pending stops 到 memory."""
+    """初始化時由 file load pending stops 到 memory (線程安全)."""
     global _pending_stop_orders
-    
-    loaded = _load_pending_stops_from_file()
+
+    # 將 load 同 assign 包喺同一個 lock 入面，避免 race condition
     with _pending_stop_lock:
+        loaded = _load_pending_stops_from_file()
         _pending_stop_orders = loaded
-    
-    if loaded:
-        print(f"[StopMonitor] Restored {len(loaded)} pending stop orders from disk")
+
+        if loaded:
+            print(f"[StopMonitor] Restored {len(loaded)} pending stop orders from disk")
 
 
 def _get_pending_stop_orders() -> Dict[str, Dict]:
@@ -113,7 +112,7 @@ def _get_pending_stop_orders() -> Dict[str, Dict]:
 def _add_pending_stop_order(entry_order_id: str, order_info: Dict) -> None:
     """加入有待觸發止蝕單到隊列，同時寫入 file."""
     with _pending_stop_lock:
-        order_info['created_at'] = datetime.utcnow().isoformat()
+        order_info['created_at'] = datetime.now(timezone.utc).isoformat()
         order_info['filled_qty'] = 0
         order_info['stop_loss_placed_qty'] = 0  # 防重複：已掛止蝕單既股數
         # 重試追蹤
@@ -368,7 +367,7 @@ def _monitor_loop(host: str, port: int, check_interval: float = 2.0):
                                             "stop_loss_retry_count": new_retry_count,
                                             "status": "FAILED_NEED_MANUAL",
                                             "last_error": result.get('error'),
-                                            "failed_at": datetime.utcnow().isoformat()
+                                            "failed_at": datetime.now(timezone.utc).isoformat()
                                         })
                                         _remove_pending_stop_order(entry_order_id)
                                     else:
@@ -376,7 +375,7 @@ def _monitor_loop(host: str, port: int, check_interval: float = 2.0):
                                         print(f"[StopMonitor] Failed to trigger STOP order: {result.get('error')}. Retry {new_retry_count}/{MAX_STOP_LOSS_RETRIES}")
                                         _update_pending_stop_order(entry_order_id, {
                                             "stop_loss_retry_count": new_retry_count,
-                                            "last_retry_at": datetime.utcnow().isoformat()
+                                            "last_retry_at": datetime.now(timezone.utc).isoformat()
                                         })
                             else:
                                 # 無新成交股數需要掛止蝕
@@ -454,10 +453,40 @@ def _fetch_hkdusd_rate() -> float:
             )
             resp.raise_for_status()
             data = resp.json()
-            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+
+            # 強化 error handling：檢查 response structure
+            if not data:
+                print("[Futu] Empty response from Yahoo, using fallback")
+                return _HKD_USD_FALLBACK
+
+            chart_result = data.get("chart", {}).get("result")
+            if not chart_result or not isinstance(chart_result, list) or len(chart_result) == 0:
+                print("[Futu] No chart result in Yahoo response, using fallback")
+                return _HKD_USD_FALLBACK
+
+            meta = chart_result[0].get("meta")
+            if not meta:
+                print("[Futu] No meta in Yahoo chart result, using fallback")
+                return _HKD_USD_FALLBACK
+
+            price = meta.get("regularMarketPrice")
+            if price is None:
+                print("[Futu] No regularMarketPrice in Yahoo meta, using fallback")
+                return _HKD_USD_FALLBACK
+
             rate = float(price)
             print(f"[Futu] HKDUSD rate: {rate}")
             return rate
+
+    except httpx.TimeoutException:
+        print(f"[Futu] Timeout fetching HKDUSD rate, using fallback {_HKD_USD_FALLBACK:.4f}")
+        return _HKD_USD_FALLBACK
+    except httpx.HTTPStatusError as e:
+        print(f"[Futu] HTTP error fetching HKDUSD rate: {e.response.status_code}, using fallback")
+        return _HKD_USD_FALLBACK
+    except (KeyError, TypeError, ValueError) as e:
+        print(f"[Futu] Data parsing error for HKDUSD rate ({e}), using fallback")
+        return _HKD_USD_FALLBACK
     except Exception as e:
         print(f"[Futu] Failed to fetch HKDUSD rate ({e}), using fallback {_HKD_USD_FALLBACK:.4f}")
         return _HKD_USD_FALLBACK
@@ -916,7 +945,7 @@ def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 # ============================================================================
@@ -938,7 +967,7 @@ def get_env():
     return EnvResponse(
         success=True,
         trade_env=_get_trade_env(),
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -950,7 +979,7 @@ def set_env(request: SetEnvRequest):
         return EnvResponse(
             success=True,
             trade_env=_get_trade_env(),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -986,7 +1015,7 @@ def get_positions():
             success=True,
             positions=positions,
             message=f"Synced {len(positions)} positions",
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
     except ImportError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1015,14 +1044,14 @@ def get_account_balance():
                 success=True,
                 account_balance=AccountBalance(**balance),
                 message=f"Account balance fetched",
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
             )
         else:
             return BalanceResponse(
                 success=False,
                 account_balance=None,
                 message="No account balance found",
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
             )
     except ImportError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1086,7 +1115,7 @@ def place_order(order: OrderRequest):
             stop_order_id=result.get("stop_order_id"),
             status=result.get("status"),
             message=result.get("message", "Order placed successfully"),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
     except ImportError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1120,7 +1149,7 @@ def get_pending_stop_orders():
     return PendingStopOrdersResponse(
         success=True,
         pending_orders=pending_list,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 

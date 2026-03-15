@@ -2,6 +2,8 @@
  * Yahoo Finance API Client
  */
 
+import { calculateSMA, calculateEMA } from './indicators'
+
 export type DataSource = 'yahoo' | 'futu'
 
 export interface QuoteData {
@@ -41,34 +43,6 @@ function normalizeSymbol(symbol: string): string {
   }
   
   return upper
-}
-
-/**
- * 計算 SMA
- */
-function calculateSMA(data: number[], period: number): number | null {
-  if (data.length < period) return null
-  const slice = data.slice(-period)
-  return slice.reduce((a, b) => a + b, 0) / period
-}
-
-/**
- * 計算 EMA
- */
-function calculateEMA(data: number[], period: number): number | null {
-  if (data.length < period) return null
-  
-  // 初始 EMA = SMA of first 'period' values
-  const initialSlice = data.slice(0, period)
-  let ema = initialSlice.reduce((a, b) => a + b, 0) / period
-  
-  const multiplier = 2 / (period + 1)
-  
-  // 由第period個數據開始計
-  for (let i = period; i < data.length; i++) {
-    ema = (data[i] - ema) * multiplier + ema
-  }
-  return ema
 }
 
 /**
