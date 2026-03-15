@@ -10,6 +10,7 @@ services:
     ports:
       - "127.0.0.1:11111:11111"  # TCP 行情 - 淨係本機
       - "127.0.0.1:11112:11112"  # WebSocket - 淨係本機
+      - "127.0.0.1:8081:8081"    # Web UI - SMS 驗證
     environment:
       # 登入憑證 (用 MD5 密碼)
       - FUTU_LOGIN_ACCOUNT=${FUTU_LOGIN_ACCOUNT}
@@ -19,7 +20,7 @@ services:
       - MARKET_US=1
       - MARKET_CN=0
     volumes:
-      - futuopend_data:/data
+      - futuopend_data:/root/.com.futunn.FutuOpenD
     restart: unless-stopped
     networks:
       - vcp-network

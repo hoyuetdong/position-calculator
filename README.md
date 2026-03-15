@@ -76,34 +76,85 @@ cd /Users/mac/Desktop/hoyuetdong/algo/position-calculator && npm run dev
 
 如果你想用富途數據，需要以下設置：
 
-### 1. 申請富途開放平台帳戶
+### 1. 準備富途帳戶
 
-1. 前往 [富途開放平台](https://open.futuhk.com/)
-2. 註冊並完成實名認證
-3. 創建應用程式，獲取 `AppID` 和 `AppKey`
+1. 前往 [富途開放平台](https://open.futuhk.com/) 註冊帳戶
+2. 記住你嘅富途登入 ID / Email / 手機號碼
+3. 生成登入密碼嘅 MD5 (睇下面教學)
 
-### 2. 創建 `.env` 文件
-
-```bash
-FUTU_UNLOCK_PASSWORD=你的解鎖密碼
-```
-
-### 3. 運行 FutuOpenD
+### 2. 生成 MD5 密碼
 
 ```bash
-docker run -d \
-  --name futuopend \
-  -p 11111:11111 \
-  -p 11112:11112 \
-  -e UNLOCK_PASSWORD=你的解鎖密碼 \
-  adrianhu/futuopend:latest
+# Linux / Mac 都可以用呢個 command
+echo -n '你既富途登入密碼' | md5sum | cut -d' ' -f1
+# 或者
+echo -n '你既富途登入密碼' | md5
 ```
 
-### 4. 啟動應用
+複製輸出嘅 32 位小寫 MD5 值。
+
+### 3. 創建 `.env` 文件
 
 ```bash
-npm run dev
+# 複製範例
+cp .env.example .env
+
+# 編輯 .env，填入你既資料
+nano .env
 ```
+
+確保以下變數已經設定：
+```
+FUTU_LOGIN_ACCOUNT=你既富途ID (email/手機號/用戶ID)
+FUTU_LOGIN_PWD_MD5=上面生成既32位MD5
+```
+
+### 4. Docker 部署 (本地 / VPS)
+
+#### 使用 docker-compose 啟動
+
+```bash
+# 啟動服務
+docker-compose up -d
+
+# 查看日誌
+docker-compose logs -f futuopend
+```
+
+#### 開放遠端訪問 (VPS)
+
+如果係 VPS 要畀外網訪問，修改 `docker-compose.yml`：
+
+```yaml
+ports:
+  - "0.0.0.0:11111:11111"  # 改為 0.0.0.0
+  - "0.0.0.0:11112:11112"
+  - "0.0.0.0:8081:8081"
+```
+
+### 5. 第一次登入 / SMS 驗證 (非常重要！)
+
+**第一次啟動 OpenD 時，如果富途要求 SMS 驗證：**
+
+1. 訪問 `http://你的VPS-IP:8081`
+2. 輸入你手機收到既 SMS 驗證碼
+3. 點擊 Submit
+
+**驗證成功後既效果：**
+- OpenD 會記錄設備，以後重啟唔使再驗證
+- 確保用 `-v` volume mapping 持久化 `/root/.com.futunn.FutuOpenD` 目錄
+
+### 6. 驗證連線
+
+```bash
+# 查看 OpenD 狀態
+curl http://localhost:8081/status
+
+# 或者睇日誌
+docker-compose logs futuopend
+```
+
+如果見到「行情連接成功」就代表 OK 喇！
 
 ---
 
