@@ -6,7 +6,6 @@ import {
   TrendingUp, 
   TrendingDown, 
   AlertTriangle, 
-  Save,
   Trash2,
   Settings,
   Info,
@@ -20,8 +19,9 @@ import {
   type QuoteData,
   type DataSource
 } from '@/lib/yahooAPI'
-import { fetchPositions, fetchAccountBalance, type Position as BrokerPosition } from '@/lib/positionsAPI'
+import { fetchPositions, fetchAccountBalance, placeOrder, fetchEnv, setEnv, type BrokerPosition } from '@/lib/positionsAPI'
 import CandlestickChart from '@/components/CandlestickChart'
+import DataSourceControl from '@/components/DataSourceControl'
 
 interface Position {
   id: string
@@ -431,6 +431,11 @@ export default function Home() {
   const [dataSource, setDataSource] = useState<DataSource>('yahoo')
   const [futuConnected, setFutuConnected] = useState(false)
   
+  // 交易環境狀態
+  const [tradeEnv, setTradeEnv] = useState<'SIMULATE' | 'REAL'>('SIMULATE')
+  const [showEnvConfirm, setShowEnvConfirm] = useState(false)
+  const [pendingEnvSwitch, setPendingEnvSwitch] = useState<'SIMULATE' | 'REAL' | null>(null)
+  
   // 合併 load + save 係同一個 effect，避免 race condition
   useEffect(() => {
     // Client only: load from localStorage
@@ -475,6 +480,11 @@ export default function Home() {
   const [balanceLastUpdated, setBalanceLastUpdated] = useState<string | null>(null)
   const [syncingBalance, setSyncingBalance] = useState(false)
   
+  // Order dialog state
+  const [showOrderConfirm, setShowOrderConfirm] = useState(false)
+  const [ordering, setOrdering] = useState(false)
+  const [orderResult, setOrderResult] = useState<{success: boolean; message: string; orderId?: string} | null>(null)
+  
   // Tab navigation state
   const [activeTab, setActiveTab] = useState<'position' | 'zerocost'>('position')
   
@@ -510,6 +520,19 @@ export default function Home() {
       syncBrokerPositions()
     }
   }, [hydrated, syncBrokerPositions])
+  
+  // Fetch trade environment on page load
+  useEffect(() => {
+    const fetchEnvStatus = async () => {
+      try {
+        const envData = await fetchEnv()
+        setTradeEnv(envData.trade_env as 'SIMULATE' | 'REAL')
+      } catch (error) {
+        console.error('Failed to fetch env:', error)
+      }
+    }
+    fetchEnvStatus()
+  }, [])
   
   // Handle chart click - set buy price and auto-calculate stop loss
   const handleChartClick = useCallback((price: number) => {
@@ -696,6 +719,58 @@ export default function Home() {
     setSyncingBalance(false)
   }, [])
   
+  // Place order function
+  const handlePlaceOrder = useCallback(async () => {
+    if (!ticker || !buyPoint || sharesToBuy <= 0) return
+
+    setOrdering(true)
+    setOrderResult(null)
+
+    try {
+      const response = await placeOrder({
+        symbol: ticker.toUpperCase(),
+        price: parseFloat(buyPoint),
+        quantity: sharesToBuy,
+        order_type: 'LIMIT',
+        side: 'BUY',
+        stop_loss_price: stopLoss ? parseFloat(stopLoss) : undefined,
+      })
+
+      setOrderResult({
+        success: response.success,
+        message: response.message,
+        orderId: response.order_id || undefined,
+      })
+      
+      if (response.success) {
+        // Refresh positions after successful order
+        setTimeout(() => {
+          syncBrokerPositions()
+        }, 2000)
+      }
+    } catch (error) {
+      setOrderResult({
+        success: false,
+        message: error instanceof Error ? error.message : '落單失敗',
+      })
+    }
+    
+    setOrdering(false)
+  }, [ticker, buyPoint, sharesToBuy, syncBrokerPositions])
+  
+  // Handle environment switch
+  const handleEnvSwitch = useCallback(async (newEnv: 'SIMULATE' | 'REAL') => {
+    try {
+      await setEnv(newEnv)
+      setTradeEnv(newEnv)
+      setShowEnvConfirm(false)
+      setPendingEnvSwitch(null)
+    } catch (error) {
+      console.error('Failed to switch env:', error)
+      alert('切換環境失敗，請重試')
+    }
+  }, [])
+  
   // Check if balance needs update (once per day, after 4:30 PM EST = 9:30 PM UTC = 21:30 UTC)
   // Or if never updated before
   useEffect(() => {
@@ -760,51 +835,45 @@ export default function Home() {
           
           {/* Right side controls */}
           <div className="flex items-center gap-3">
-            {/* Data Source Toggle */}
-            <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
-              <button
-                type="button"
-                onClick={() => { setDataSource('yahoo'); setConnected(true); }}
-                className={`px-3 py-1 rounded-md text-sm transition-colors cursor-pointer ${
-                  dataSource === 'yahoo' 
-                    ? 'bg-primary text-primary-foreground' 
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Yahoo
-              </button>
-              <button
-                type="button"
-                onClick={() => setDataSource('futu')}
-                className={`px-3 py-1 rounded-md text-sm transition-colors cursor-pointer flex items-center gap-1 ${
-                  dataSource === 'futu' 
-                    ? 'bg-primary text-primary-foreground' 
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <Database className="w-3 h-3" />
-                富途
-              </button>
-            </div>
+            {/* Data Source Control - 統一控制列 */}
+            <DataSourceControl
+              dataSource={dataSource}
+              futuConnected={futuConnected}
+              onDataSourceChange={(source) => {
+                if (source === 'yahoo') {
+                  setDataSource('yahoo')
+                  setConnected(true)
+                } else {
+                  setDataSource('futu')
+                }
+              }}
+              onReconnect={reconnect}
+            />
             
-            {/* Connection Status */}
+            {/* Connection Status / Trade Environment Toggle */}
             {connected && (
-              <span className={`text-xs px-2 py-1 rounded-full ${
-                dataSource === 'yahoo' || futuConnected 
-                  ? 'bg-green-500/20 text-green-600 dark:text-green-400'
-                  : 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400'
-              }`}>
-                {dataSource === 'yahoo' ? 'Yahoo Finance' : (futuConnected ? '富途 OpenD' : '富途 (未連接)')}
-              </span>
-            )}
-            {!connected && (
-              <button 
-                type="button"
-                onClick={reconnect}
-                className="p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
-              >
-                <RefreshCw className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Trade Environment Badge */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (tradeEnv === 'SIMULATE') {
+                      setPendingEnvSwitch('REAL')
+                      setShowEnvConfirm(true)
+                    } else {
+                      handleEnvSwitch('SIMULATE')
+                    }
+                  }}
+                  className={`text-xs px-2 py-1 rounded-full font-medium transition-colors cursor-pointer ${
+                    tradeEnv === 'SIMULATE' 
+                      ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/30'
+                      : 'bg-red-500/20 text-red-600 dark:text-red-400 hover:bg-red-500/30'
+                  }`}
+                  title="Click to switch environment"
+                >
+                  {tradeEnv === 'SIMULATE' ? '🟢 模擬倉' : '🔴 真實環境'}
+                </button>
+              </div>
             )}
             {/* Broker Sync Button */}
             <button
@@ -1134,12 +1203,16 @@ export default function Home() {
               <div className="flex gap-2 mt-6">
                 <button
                   type="button"
-                  onClick={savePosition}
+                  onClick={() => setShowOrderConfirm(true)}
                   disabled={sharesToBuy <= 0}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg hover:bg-opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer ${
+                    tradeEnv === 'REAL' 
+                      ? 'bg-red-500 text-white' 
+                      : 'bg-profit text-black'
+                  }`}
                 >
-                  <Save className="w-4 h-4" />
-                  儲存
+                  <TrendingUp className="w-4 h-4" />
+                  {tradeEnv === 'REAL' ? '一鍵落單 (真金白銀)' : '一鍵落單 (模擬)'}
                 </button>
                 <button
                   type="button"
@@ -1228,6 +1301,179 @@ export default function Home() {
           />
         )}
       </main>
+      
+      {/* Environment Switch Confirmation Dialog */}
+      {showEnvConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border border-red-500 rounded-xl p-6 max-w-md w-full">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle className="w-8 h-8 text-red-500" />
+              </div>
+              <h3 className="text-xl font-bold text-red-500 mb-2">⚠️ 警告：你即將切換至真實交易環境</h3>
+              <p className="text-muted-foreground mb-4">
+                切換後，所有落單將會扣除真實資金！<br/>
+                請確保你已經了解風險，先繼續操作。
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEnvConfirm(false)
+                    setPendingEnvSwitch(null)
+                  }}
+                  className="flex-1 px-4 py-3 bg-secondary border border-border rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleEnvSwitch('REAL')}
+                  className="flex-1 px-4 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors cursor-pointer"
+                >
+                  確認切換至真倉
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Order Confirmation Dialog */}
+      {showOrderConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border border-border rounded-xl p-6 max-w-md w-full">
+            {orderResult ? (
+              /* Order Result */
+              <div className="text-center">
+                {orderResult.success ? (
+                  <>
+                    <div className="w-16 h-16 bg-profit/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <TrendingUp className="w-8 h-8 text-profit" />
+                    </div>
+                    <h3 className="text-xl font-bold text-profit mb-2">落單成功！</h3>
+                    <p className="text-muted-foreground mb-2">{orderResult.message}</p>
+                    {orderResult.orderId && (
+                      <p className="text-sm text-muted-foreground">Order ID: {orderResult.orderId}</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="w-16 h-16 bg-loss/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <AlertTriangle className="w-8 h-8 text-loss" />
+                    </div>
+                    <h3 className="text-xl font-bold text-loss mb-2">落單失敗</h3>
+                    <p className="text-muted-foreground">{orderResult.message}</p>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOrderConfirm(false)
+                    setOrderResult(null)
+                  }}
+                  className="mt-6 w-full px-4 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors cursor-pointer"
+                >
+                  關閉
+                </button>
+              </div>
+            ) : (
+              /* Order Confirmation */
+              <>
+                <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+                  <TrendingUp className="w-6 h-6 text-profit" />
+                  確認落單
+                </h3>
+                
+                <div className="bg-secondary/50 rounded-lg p-4 mb-6">
+                  <div className="flex justify-between mb-2">
+                    <span className="text-muted-foreground">股票:</span>
+                    <span className="font-bold">{ticker.toUpperCase()}</span>
+                  </div>
+                  <div className="flex justify-between mb-2">
+                    <span className="text-muted-foreground">買入價:</span>
+                    <span className="font-mono">${parseFloat(buyPoint).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between mb-2">
+                    <span className="text-muted-foreground">股數:</span>
+                    <span className="font-mono text-profit">{sharesToBuy.toLocaleString()}</span>
+                  </div>
+                  {stopLoss && (
+                  <>
+                    <div className="flex justify-between mb-2">
+                      <span className="text-muted-foreground">止蝕位:</span>
+                      <span className="font-mono text-loss">${parseFloat(stopLoss).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between mb-2">
+                      <span className="text-muted-foreground">止蝕單:</span>
+                      <span className="font-mono text-warning">成交後自動觸發</span>
+                    </div>
+                  </>
+                )}
+                  <div className="border-t border-border pt-2 mt-2 flex justify-between">
+                    <span className="text-muted-foreground">總額:</span>
+                    <span className="font-bold">${(sharesToBuy * parseFloat(buyPoint)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                </div>
+
+                {stopLoss && (
+                  <div className="bg-profit/20 border border-profit rounded-lg p-3 mb-6">
+                    <p className="text-sm text-profit flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      當買入單成交後，將自動觸發止蝕單 (SELL {sharesToBuy} @ ${parseFloat(stopLoss).toFixed(2)})
+                    </p>
+                  </div>
+                )}
+                
+                {tradeEnv === 'REAL' ? (
+                  <div className="bg-red-500/20 border border-red-500 rounded-lg p-3 mb-6">
+                    <p className="text-sm text-red-400 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      警告：真實交易環境 (REAL) - 落單將扣除真實資金！
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-warning/20 border border-warning rounded-lg p-3 mb-6">
+                    <p className="text-sm text-warning flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      模擬交易環境 (SIMULATE)
+                    </p>
+                  </div>
+                )}
+                
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowOrderConfirm(false)}
+                    disabled={ordering}
+                    className="flex-1 px-4 py-3 bg-secondary border border-border rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePlaceOrder}
+                    disabled={ordering}
+                    className="flex-1 px-4 py-3 bg-profit text-black rounded-lg hover:bg-profit/90 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {ordering ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        落單緊...
+                      </>
+                    ) : (
+                      <>
+                        <TrendingUp className="w-4 h-4" />
+                        確認落單
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
