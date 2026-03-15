@@ -9,7 +9,7 @@ services:
     stdin_open: true
     ports:
       - "127.0.0.1:11111:11111"  # TCP 行情 - 淨係本機
-      - "127.0.0.1:11112:11112"  # WebSocket - 淨係本機
+      - "127.0.0.1:33333:33333"   # WebSocket - 淨係本機
       - "127.0.0.1:8081:8081"    # Web UI - SMS 驗證
     environment:
       # 登入憑證 (用 MD5 密碼)
@@ -55,7 +55,6 @@ services:
       - PYTHON_API_URL=http://backend:8000
       - FUTU_HOST=futuopend
       - FUTU_PORT=11111
-      - FUTU_WS_PORT=11112
     depends_on:
       - backend
     restart: unless-stopped
