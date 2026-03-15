@@ -9,12 +9,14 @@ interface DataSourceControlProps {
   dataSource: DataSource
   futuConnected: boolean
   onDataSourceChange: (source: DataSource) => void
+  onReconnect: () => void
 }
 
 export default function DataSourceControl({
   dataSource,
   futuConnected,
   onDataSourceChange,
+  onReconnect,
 }: DataSourceControlProps) {
   const [isAnimating, setIsAnimating] = useState(false)
 
