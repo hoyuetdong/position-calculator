@@ -10,13 +10,16 @@ import {
   Trash2,
   Settings,
   Info,
-  RefreshCw
+  RefreshCw,
+  Database
 } from 'lucide-react'
 import { 
   getQuote, 
   getHistoricalKLines,
-  type QuoteData 
+  type QuoteData,
+  type DataSource
 } from '@/lib/yahooAPI'
+import { fetchPositions, type Position as BrokerPosition } from '@/lib/positionsAPI'
 import CandlestickChart from '@/components/CandlestickChart'
 
 interface Position {
@@ -140,6 +143,10 @@ export default function Home() {
   // Hydration fix: defer all client-side logic
   const [hydrated, setHydrated] = useState(false)
   
+  // Data source 切換
+  const [dataSource, setDataSource] = useState<DataSource>('yahoo')
+  const [futuConnected, setFutuConnected] = useState(false)
+  
   // 合併 load + save 係同一個 effect，避免 race condition
   useEffect(() => {
     // Client only: load from localStorage
@@ -174,6 +181,11 @@ export default function Home() {
   const [positions, setPositions] = useState<Position[]>([])
   const [showSettings, setShowSettings] = useState(false)
   
+  // Broker sync state
+  const [brokerPositions, setBrokerPositions] = useState<BrokerPosition[]>([])
+  const [syncing, setSyncing] = useState(false)
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null)
+  
   // Handle chart click - set buy price and auto-calculate stop loss
   const handleChartClick = useCallback((price: number) => {
     setBuyPoint(price.toFixed(2))
@@ -187,15 +199,32 @@ export default function Home() {
   // Initialize API connection
   useEffect(() => {
     const init = async () => {
-      try {
-        setConnected(true)
-      } catch (error) {
-        console.error('API connection error:', error)
-        setConnected(false)
+      // Yahoo 唔使連線，永遠 connected
+      setConnected(true)
+      
+      // 富途要試吓 connect
+      if (dataSource === 'futu') {
+        try {
+          // 用港股00700測試連線（美股暫時未support）
+          const response = await fetch('/api/quote/00700?source=futu')
+          if (response.ok) {
+            const data = await response.json()
+            // 如果有error field 或者 price=0，就當fail
+            if (data.error || data.lastPrice === 0) {
+              setFutuConnected(false)
+            } else {
+              setFutuConnected(true)
+            }
+          } else {
+            setFutuConnected(false)
+          }
+        } catch {
+          setFutuConnected(false)
+        }
       }
     }
     init()
-  }, [])
+  }, [dataSource])
   
   // Fetch quote when ticker changes
   useEffect(() => {
@@ -203,8 +232,8 @@ export default function Home() {
       if (ticker.length >= 1) {
         setLoading(true)
         try {
-          const quote = await getQuote(ticker)
-          const klines = await getHistoricalKLines(ticker, chartDays)
+          const quote = await getQuote(ticker, dataSource)
+          const klines = await getHistoricalKLines(ticker, chartDays, dataSource)
           
           setQuoteData(quote)
           
@@ -247,7 +276,7 @@ export default function Home() {
     
     const timer = setTimeout(fetchData, 500)
     return () => clearTimeout(timer)
-  }, [ticker, chartDays])
+  }, [ticker, chartDays, dataSource])
   
   // Calculations（避免 NaN：空字串當 0）
   const buyNum = parseFloat(buyPoint) || 0
@@ -306,6 +335,23 @@ export default function Home() {
     setLoading(false)
   }
   
+  // Sync positions from broker
+  const syncBrokerPositions = async () => {
+    setSyncing(true)
+    try {
+      const response = await fetchPositions()
+      if (response.success) {
+        setBrokerPositions(response.positions)
+        setLastSyncTime(response.timestamp)
+      } else {
+        console.error('Sync failed:', response.message)
+      }
+    } catch (error) {
+      console.error('Failed to sync positions:', error)
+    }
+    setSyncing(false)
+  }
+  
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -316,9 +362,41 @@ export default function Home() {
             <h1 className="text-xl font-bold">VCP Position Calculator</h1>
           </div>
           <div className="flex items-center gap-3">
+            {/* Data Source Toggle */}
+            <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
+              <button
+                type="button"
+                onClick={() => { setDataSource('yahoo'); setConnected(true); }}
+                className={`px-3 py-1 rounded-md text-sm transition-colors cursor-pointer ${
+                  dataSource === 'yahoo' 
+                    ? 'bg-primary text-primary-foreground' 
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Yahoo
+              </button>
+              <button
+                type="button"
+                onClick={() => setDataSource('futu')}
+                className={`px-3 py-1 rounded-md text-sm transition-colors cursor-pointer flex items-center gap-1 ${
+                  dataSource === 'futu' 
+                    ? 'bg-primary text-primary-foreground' 
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Database className="w-3 h-3" />
+                富途
+              </button>
+            </div>
+            
+            {/* Connection Status */}
             {connected && (
-              <span className="text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-600 dark:text-green-400">
-                Yahoo Finance
+              <span className={`text-xs px-2 py-1 rounded-full ${
+                dataSource === 'yahoo' || futuConnected 
+                  ? 'bg-green-500/20 text-green-600 dark:text-green-400'
+                  : 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400'
+              }`}>
+                {dataSource === 'yahoo' ? 'Yahoo Finance' : (futuConnected ? '富途 OpenD' : '富途 (未連接)')}
               </span>
             )}
             {!connected && (
@@ -336,6 +414,16 @@ export default function Home() {
               className="p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
             >
               <Settings className="w-5 h-5" />
+            </button>
+            {/* Broker Sync Button */}
+            <button 
+              type="button"
+              onClick={syncBrokerPositions}
+              disabled={syncing}
+              className="p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer disabled:opacity-50"
+              title="同步持倉"
+            >
+              <RefreshCw className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
@@ -686,6 +774,37 @@ export default function Home() {
                         <button type="button" onClick={() => deletePosition(pos.id)} className="p-1 text-muted-foreground hover:text-loss transition-colors cursor-pointer">
                           <Trash2 className="w-4 h-4" />
                         </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Broker Positions */}
+            {brokerPositions.length > 0 && (
+              <div className="bg-card border border-border rounded-xl p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold">券商持倉</h3>
+                  {lastSyncTime && (
+                    <span className="text-xs text-muted-foreground">
+                      同步: {new Date(lastSyncTime).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-3 max-h-64 overflow-y-auto">
+                  {brokerPositions.map((pos, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg">
+                      <div>
+                        <span className="font-bold text-primary">{pos.symbol}</span>
+                        <p className="text-xs text-muted-foreground">
+                          {pos.quantity} 股 {pos.cost_price ? `@ $${pos.cost_price.toFixed(2)}` : ''}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        {pos.current_price && (
+                          <span className="text-sm font-mono">${pos.current_price.toFixed(2)}</span>
+                        )}
                       </div>
                     </div>
                   ))}

@@ -2,6 +2,8 @@
  * Yahoo Finance API Client
  */
 
+export type DataSource = 'yahoo' | 'futu'
+
 export interface QuoteData {
   symbol?: string
   ticker?: string
@@ -78,12 +80,14 @@ export async function initFutuAPI(): Promise<void> {
 
 /**
  * 獲取報價 - 直接用本地 proxy
+ * @param symbol 股票代號
+ * @param source 數據源: yahoo | futu (default: yahoo)
  */
-export async function getQuote(symbol: string): Promise<QuoteData> {
+export async function getQuote(symbol: string, source: DataSource = 'yahoo'): Promise<QuoteData> {
   const normalized = normalizeSymbol(symbol)
   
   try {
-    const response = await fetch(`/api/quote/${symbol}`)
+    const response = await fetch(`/api/quote/${symbol}?source=${source}`)
     const data = await response.json()
     
     if (data.error) {
@@ -97,7 +101,7 @@ export async function getQuote(symbol: string): Promise<QuoteData> {
     let sma200: number | null = null
     
     try {
-      const histResponse = await fetch(`/api/klines/${symbol}?days=2000`)
+      const histResponse = await fetch(`/api/klines/${symbol}?days=2000&source=${source}`)
       const histData = await histResponse.json()
       
       if (Array.isArray(histData) && histData.length > 0) {
@@ -137,12 +141,15 @@ export async function getQuote(symbol: string): Promise<QuoteData> {
 
 /**
  * 獲取歷史K線數據
+ * @param symbol 股票代號
+ * @param days 天數
+ * @param source 數據源: yahoo | futu (default: yahoo)
  */
-export async function getHistoricalKLines(symbol: string, days: number = 30): Promise<any[]> {
+export async function getHistoricalKLines(symbol: string, days: number = 30, source: DataSource = 'yahoo'): Promise<any[]> {
   const normalized = normalizeSymbol(symbol)
   
   try {
-    const response = await fetch(`/api/klines/${symbol}?days=${Math.min(3000, days)}`)
+    const response = await fetch(`/api/klines/${symbol}?days=${Math.min(3000, days)}&source=${source}`)
     const data = await response.json()
     
     if (Array.isArray(data)) {
