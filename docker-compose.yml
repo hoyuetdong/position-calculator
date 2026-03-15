@@ -19,7 +19,7 @@ services:
       - MARKET_US=1
       - MARKET_CN=0
     volumes:
-      - futuopend_data:/root/.com.futunn.FutuOpenD
+      - ~/.com.futunn.FutuOpenD:/root/.com.futunn.FutuOpenD
     restart: unless-stopped
     networks:
       - vcp-network
@@ -61,7 +61,6 @@ services:
       - vcp-network
 
 volumes:
-  futuopend_data:
   backend_data:
 
 networks:
