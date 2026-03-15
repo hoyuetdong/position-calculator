@@ -1,30 +1,28 @@
 services:
-  # 富途行情網關 (淨係畀本地連線)
+  # 富途行情網關
   futuopend:
     image: ostai/futuopend:latest
     platform: linux/amd64
     container_name: futuopend
-    tty: true
-    stdin_open: true
     ports:
-      - "127.0.0.1:11111:11111"  # TCP 行情 - 淨係本機
-      - "127.0.0.1:33333:33333"   # WebSocket - 淨係本機
-      - "127.0.0.1:8081:8081"    # Web UI - SMS 驗證
+      - "127.0.0.1:11111:11111"
+      - "127.0.0.1:33333:33333"
+      - "127.0.0.1:8081:8081"
     environment:
-      # 登入憑證 (用 MD5 密碼)
       - FUTU_LOGIN_ACCOUNT=${FUTU_LOGIN_ACCOUNT}
       - FUTU_LOGIN_PWD_MD5=${FUTU_LOGIN_PWD_MD5}
-      # 股票市場權限
       - MARKET_HK=1
       - MARKET_US=1
       - MARKET_CN=0
+      # 允許非本地連接（for Docker network）
+      - FUTU_TRADE_CONN_NO_ENCRYPTION=yes
     volumes:
-      - ~/.com.futunn.FutuOpenD:/root/.com.futunn.FutuOpenD
+      - futuopend_data:/root/.com.futunn.FutuOpenD
     restart: unless-stopped
     networks:
       - vcp-network
 
-  # Python Backend (止蝕邏輯 + 持倉同步)
+  # Python Backend
   backend:
     build: ./backend
     container_name: vcp-backend
@@ -62,6 +60,7 @@ services:
 
 volumes:
   backend_data:
+  futuopend_data:
 
 networks:
   vcp-network:
