@@ -1,9 +1,8 @@
-version: '3.8'
-
 services:
   # 富途行情網關 (淨係畀本地連線)
   futuopend:
     image: ostai/futuopend:latest
+    platform: linux/amd64
     container_name: futuopend
     tty: true
     stdin_open: true
