@@ -11,6 +11,9 @@ export interface Position {
   asset_type: string
 }
 
+// Alias for broker positions (same as Position)
+export type BrokerPosition = Position
+
 export interface PositionsResponse {
   success: boolean
   positions: Position[]

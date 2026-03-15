@@ -11,6 +11,11 @@ const nextConfig = {
         tls: false,
         crypto: false,
       }
+      // Ignore memcpy module not found (bytebuffer dependency)
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        memcpy: false,
+      }
     }
     return config
   },
