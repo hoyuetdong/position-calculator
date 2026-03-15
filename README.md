@@ -36,6 +36,22 @@ npm run dev
 
 打開瀏覽器訪問：`http://localhost:3000`
 
+### 4. (可選) 啟動 Backend
+
+如果要用富途數據，需要同時啟動 backend：
+
+```bash
+# 停咗兩個 service
+kill $(lsof -t -i:3000) 2>/dev/null
+kill $(lsof -t -i:8000) 2>/dev/null
+
+# 啟動 backend (放後台)
+cd /Users/mac/Desktop/hoyuetdong/algo/position-calculator/backend && python3 main.py &
+
+# 啟動 frontend
+cd /Users/mac/Desktop/hoyuetdong/algo/position-calculator && npm run dev
+```
+
 ---
 
 ## 使用教學
