@@ -1,45 +1,36 @@
 services:
-  # 富途行情網關
-  futuopend:
-    image: ostai/futuopend:latest
-    platform: linux/amd64
-    container_name: futuopend
-    ports:
-      - "127.0.0.1:11111:11111"
-      - "127.0.0.1:33333:33333"
-      - "127.0.0.1:8081:8081"
-    environment:
-      - FUTU_LOGIN_ACCOUNT=${FUTU_LOGIN_ACCOUNT}
-      - FUTU_LOGIN_PWD_MD5=${FUTU_LOGIN_PWD_MD5}
-      - MARKET_HK=1
-      - MARKET_US=1
-      - MARKET_CN=0
-      # 允許非本地連接（for Docker network）
-      - FUTU_TRADE_CONN_NO_ENCRYPTION=yes
-    volumes:
-      - futuopend_data:/root/.com.futunn.FutuOpenD
-    restart: unless-stopped
-    networks:
-      - vcp-network
+  # 富途行情網關 (本地直接跑，唔放入 Docker - 因為交易接口唔需要加密)
+  # 如果你想將 OpenD 都放入 Docker，必須先喺 OpenD 設定入面開啟 RSA 加密並配置私鑰
+  # 詳情睇: https://openapi.futunn.com/futu-api-doc/en/opend/opend-cmd.html
+  #
+  # 本地跑 OpenD 嘅好處：
+  # 1. 唔需要配置 RSA 加密 (交易接口允許 localhost 唔加密)
+  # 2. 方便調試，睇得到 GUI
+  # 3. 唔需要重複搞 SMS 驗證
+  #
+  # 確保你本地 OpenD 登入成功，並且喺 Setting 入面確認：
+  # - API Listening Address: 127.0.0.1 (預設)
+  # - API Port: 11111 (預設)
 
   # Python Backend
   backend:
     build: ./backend
     container_name: vcp-backend
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
     environment:
-      - FUTU_HOST=futuopend
+      # 本地跑 OpenD 用 host.docker.internal (Mac/Windows) 或 172.17.0.1 (Linux)
+      # 如果你 Mac 用 Docker Desktop，呢個係預設閘道 IP
+      - FUTU_HOST=host.docker.internal
       - FUTU_PORT=11111
       - FUTU_TRADE_PWD=${FUTU_TRADE_PWD}
       - PORT=8000
-    depends_on:
-      - futuopend
+    extra_hosts:
+      # 允許 container 訪問本機 - Mac/Windows Docker Desktop 適用
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
       - vcp-network
-    volumes:
-      - backend_data:/app
 
   # Web應用 (Next.js Frontend)
   vcp-calculator:
@@ -50,17 +41,11 @@ services:
     environment:
       - NODE_ENV=production
       - PYTHON_API_URL=http://backend:8000
-      - FUTU_HOST=futuopend
-      - FUTU_PORT=11111
     depends_on:
       - backend
     restart: unless-stopped
     networks:
       - vcp-network
-
-volumes:
-  backend_data:
-  futuopend_data:
 
 networks:
   vcp-network:

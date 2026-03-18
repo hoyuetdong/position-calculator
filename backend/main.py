@@ -1153,6 +1153,424 @@ def get_pending_stop_orders():
     )
 
 
+# ============================================================================
+# 行情查詢 API (使用行情接口，唔需要加密)
+# ============================================================================
+class StockQuote(BaseModel):
+    code: str
+    name: str
+    last_price: float
+    open_price: float
+    high_price: float
+    low_price: float
+    volume: int
+    # 技術指標
+    ema10: Optional[float] = None
+    ema20: Optional[float] = None
+    sma50: Optional[float] = None
+    sma200: Optional[float] = None
+    atr14: Optional[float] = None
+    change: Optional[float] = None
+    change_percent: Optional[float] = None
+
+
+class KLine(BaseModel):
+    time: int  # Unix timestamp
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class QuoteResponse(BaseModel):
+    success: bool
+    quotes: List[StockQuote]
+    timestamp: str
+
+
+class KLineResponse(BaseModel):
+    success: bool
+    klines: List[KLine]
+    timestamp: str
+
+
+@app.get("/quote/{codes}", response_model=QuoteResponse)
+def get_stock_quote(codes: str):
+    """
+    查詢股票報價 (使用行情接口，不需要加密).
+    codes: 逗號分隔嘅股票代碼，例如 "HK.00700,HK.00700,US.AAPL"
+    
+    注意：某些市場需要先 subscribe 先可以拎到行情
+    """
+    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    port = int(os.getenv("FUTU_PORT", "11111"))
+    
+    import sys
+    print(f"[Quote] === START ===", flush=True)
+    print(f"[Quote] codes='{codes}'", flush=True)
+    print(f"[Quote] host={host}, port={port}", flush=True)
+    sys.stdout.flush()
+
+    try:
+        import futu
+
+        # 分割代碼並清理
+        code_list = [c.strip() for c in codes.split(",") if c.strip()]
+        print(f"[Quote] code_list={code_list}", flush=True)
+
+        print(f"[Quote] Creating OpenQuoteContext...", flush=True)
+        sys.stdout.flush()
+        ctx = futu.OpenQuoteContext(host=host, port=port)
+        try:
+            # 先 subscribe 股票行情（某些市場需要）
+            print(f"[Quote] Subscribing to {len(code_list)} securities...", flush=True)
+            sys.stdout.flush()
+            
+            # 確定市場類型
+            market_list = set()
+            for code in code_list:
+                if code.startswith("HK."):
+                    market_list.add(futu.Market.HK)
+                elif code.startswith("US."):
+                    market_list.add(futu.Market.US)
+                elif code.startswith("SH."):
+                    market_list.add(futu.Market.SH)
+                elif code.startswith("SZ."):
+                    market_list.add(futu.Market.SZ)
+            
+            # Subscribe 每個市場
+            for market in market_list:
+                ret_sub, _ = ctx.subscribe(code_list, market)
+                print(f"[Quote] Subscribe ret={ret_sub}", flush=True)
+                sys.stdout.flush()
+            
+            # 等一下俾 OpenD 推送數據
+            import time
+            time.sleep(0.5)
+            
+            # 用 get_market_snapshot 拎行情
+            print(f"[Quote] Calling get_market_snapshot...", flush=True)
+            sys.stdout.flush()
+            ret, data = ctx.get_market_snapshot(code_list)
+            print(f"[Quote] ret={ret}, data={data}", flush=True)
+            sys.stdout.flush()
+            
+            if ret != futu.RET_OK:
+                error_msg = f"Market snapshot failed (ret={ret}): {data}"
+                print(f"[Quote] ERROR: {error_msg}", flush=True)
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            if data is None or (hasattr(data, 'empty') and data.empty):
+                error_msg = f"No snapshot data returned for {code_list}"
+                print(f"[Quote] ERROR: {error_msg}", flush=True)
+                raise HTTPException(status_code=400, detail=error_msg)
+
+            # 為每個股票計算技術指標
+            quotes = []
+            for _, row in data.iterrows():
+                code = str(row.get("code", ""))
+                
+                # 計算技術指標
+                ema10, ema20, sma50, sma200, atr14 = _calculate_technical_indicators(ctx, code)
+                
+                # 計算 change
+                last_price = float(row.get("last_price", 0) or 0)
+                prev_close = float(row.get("prev_close_price", 0) or 0)
+                change = last_price - prev_close if prev_close > 0 else 0
+                change_percent = (change / prev_close * 100) if prev_close > 0 else 0
+                
+                quotes.append(StockQuote(
+                    code=code,
+                    name=str(row.get("name", "")),
+                    last_price=last_price,
+                    open_price=float(row.get("open_price", 0) or 0),
+                    high_price=float(row.get("high_price", 0) or 0),
+                    low_price=float(row.get("low_price", 0) or 0),
+                    volume=int(row.get("volume", 0) or 0),
+                    ema10=ema10,
+                    ema20=ema20,
+                    sma50=sma50,
+                    sma200=sma200,
+                    atr14=atr14,
+                    change=change,
+                    change_percent=change_percent,
+                ))
+
+            print(f"[Quote] Success, returning {len(quotes)} quotes", flush=True)
+            sys.stdout.flush()
+            return QuoteResponse(
+                success=True,
+                quotes=quotes,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        finally:
+            ctx.close()
+            print(f"[Quote] Context closed", flush=True)
+            sys.stdout.flush()
+
+    except HTTPException:
+        raise
+    except ImportError:
+        raise HTTPException(status_code=500, detail="futu-api not installed")
+    except Exception as e:
+        import traceback
+        error_detail = f"[Quote] Exception: {e}"
+        print(error_detail, flush=True)
+        print(traceback.format_exc(), flush=True)
+        sys.stdout.flush()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _calculate_technical_indicators(ctx, code: str) -> Tuple:
+    """
+    從 K 線數據計算技術指標 (EMA, SMA, ATR)
+    返回: (ema10, ema20, sma50, sma200, atr14)
+    """
+    import futu
+    
+    try:
+        # 拎 K 線數據（預設365日）
+        ret, data, page_key = ctx.request_history_kline(
+            code=code,
+            start=None,  # 自動計算起始日期
+            end=None,
+            ktype=futu.KLType.K_DAY,
+            autype='qfq',  # 前復權
+        )
+        
+        if ret != futu.RET_OK or data is None or data.empty:
+            print(f"[Quote] Failed to get kline for {code}: {data}")
+            return (None, None, None, None, None)
+        
+        print(f"[Quote] Got {len(data)} klines for {code}")
+        
+        # 提取數據 - futu 用 time_key 欄位
+        time_col = 'time_key'
+        closes = data['close'].tolist() if 'close' in data.columns else []
+        highs = data['high'].tolist() if 'high' in data.columns else []
+        lows = data['low'].tolist() if 'low' in data.columns else []
+        
+        # 轉換時間為 timestamp
+        from datetime import datetime
+        def to_timestamp(time_str):
+            if not time_str:
+                return 0
+            try:
+                dt = datetime.strptime(str(time_str), '%Y-%m-%d %H:%M:%S')
+                return int(dt.timestamp())
+            except:
+                return 0
+        
+        data['_timestamp'] = data[time_col].apply(to_timestamp)
+        
+        if len(closes) < 10:
+            return (None, None, None, None, None)
+        
+        # 計算 EMA
+        ema10 = _calculate_ema(closes, 10) if len(closes) >= 10 else None
+        ema20 = _calculate_ema(closes, 20) if len(closes) >= 20 else None
+        sma50 = _calculate_sma(closes, 50) if len(closes) >= 50 else None
+        sma200 = _calculate_sma(closes, 200) if len(closes) >= 200 else None
+        
+        # 計算 ATR
+        atr14 = _calculate_atr(highs, lows, closes, 14) if len(closes) >= 15 else None
+        
+        return (ema10, ema20, sma50, sma200, atr14)
+        
+    except Exception as e:
+        print(f"[Quote] Error calculating indicators for {code}: {e}")
+        return (None, None, None, None, None)
+
+
+def _calculate_sma(data: list, period: int) -> Optional[float]:
+    """計算簡單移動平均線"""
+    if len(data) < period:
+        return None
+    return sum(data[-period:]) / period
+
+
+def _calculate_ema(data: list, period: int) -> Optional[float]:
+    """計算指數移動平均線"""
+    if len(data) < period:
+        return None
+    
+    # 初始 EMA 係頭 period 日的平均
+    ema = sum(data[:period]) / period
+    multiplier = 2 / (period + 1)
+    
+    for price in data[period:]:
+        ema = (price - ema) * multiplier + ema
+    
+    return ema
+
+
+def _calculate_atr(highs: list, lows: list, closes: list, period: int) -> Optional[float]:
+    """計算平均真實波幅 (ATR)"""
+    if len(highs) < period + 1 or len(lows) < period + 1 or len(closes) < period + 1:
+        return None
+    
+    tr_values = []
+    for i in range(1, len(closes)):
+        high = highs[i]
+        low = lows[i]
+        prev_close = closes[i - 1]
+        
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        tr_values.append(tr)
+    
+    if len(tr_values) < period:
+        return None
+    
+    return sum(tr_values[-period:]) / period
+
+
+@app.get("/kline/{code}", response_model=KLineResponse)
+def get_stock_kline(
+    code: str,
+    days: int = 365,
+    ktype: str = "DAY"
+):
+    """
+    獲取股票 K 線數據
+    code: 股票代碼，例如 "HK.00700"
+    days: 天數 (默認 365，最大 2000)
+    ktype: K線類型 DAY / WEEK / MONTH (默認 DAY)
+    """
+    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    port = int(os.getenv("FUTU_PORT", "11111"))
+    
+    import sys
+    from datetime import datetime, timedelta
+    
+    # 限制最大日數
+    max_days = min(days, 2000)
+    start_date = (datetime.now() - timedelta(days=max_days)).strftime('%Y-%m-%d')
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    
+    print(f"[KLine] === START === code={code}, days={days}, start={start_date}, end={end_date}", flush=True)
+    sys.stdout.flush()
+
+    try:
+        import futu
+        
+        # 確定 K 線類型
+        kt = futu.KLType.K_DAY
+        if ktype.upper() == "WEEK":
+            kt = futu.KLType.K_WEEK
+        elif ktype.upper() == "MONTH":
+            kt = futu.KLType.K_MON
+        
+        ctx = futu.OpenQuoteContext(host=host, port=port)
+        try:
+            print(f"[KLine] Calling request_history_kline...", flush=True)
+            sys.stdout.flush()
+            
+            ret, data, page_key = ctx.request_history_kline(
+                code=code,
+                start=start_date,
+                end=end_date,
+                ktype=kt,
+                autype='qfq',
+            )
+            
+            print(f"[KLine] ret={ret}, data.rows={data.shape[0] if hasattr(data, 'shape') else 'N/A'}", flush=True)
+            sys.stdout.flush()
+            
+            if ret != futu.RET_OK:
+                error_msg = f"History kline failed (ret={ret}): {data}"
+                print(f"[KLine] ERROR: {error_msg}", flush=True)
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            if data is None or (hasattr(data, 'empty') and data.empty):
+                print(f"[KLine] No kline data for {code}", flush=True)
+                return KLineResponse(
+                    success=True,
+                    klines=[],
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+            
+            # 轉換數據格式 - futu 用 time_key 欄位
+            klines = []
+            from datetime import datetime
+            def to_timestamp(time_str):
+                if not time_str:
+                    return 0
+                try:
+                    dt = datetime.strptime(str(time_str), '%Y-%m-%d %H:%M:%S')
+                    return int(dt.timestamp())
+                except:
+                    return 0
+            
+            # 第一頁數據
+            for _, row in data.iterrows():
+                klines.append(KLine(
+                    time=to_timestamp(row.get('time_key', 0)),
+                    open=float(row.get('open', 0) or 0),
+                    high=float(row.get('high', 0) or 0),
+                    low=float(row.get('low', 0) or 0),
+                    close=float(row.get('close', 0) or 0),
+                    volume=int(row.get('volume', 0) or 0),
+                ))
+            
+            # 如果有分頁，繼續拎下一頁
+            total_pages = 1
+            while page_key and total_pages < 20:  # 最多20頁 (2000條)
+                total_pages += 1
+                print(f"[KLine] Fetching page {total_pages}...", flush=True)
+                
+                ret, page_data, page_key = ctx.request_history_kline(
+                    code=code,
+                    start=start_date,
+                    end=end_date,
+                    ktype=kt,
+                    autype='qfq',
+                    page_req_key=page_key,
+                )
+                
+                if ret != futu.RET_OK or page_data is None or page_data.empty:
+                    break
+                
+                for _, row in page_data.iterrows():
+                    klines.append(KLine(
+                        time=to_timestamp(row.get('time_key', 0)),
+                        open=float(row.get('open', 0) or 0),
+                        high=float(row.get('high', 0) or 0),
+                        low=float(row.get('low', 0) or 0),
+                        close=float(row.get('close', 0) or 0),
+                        volume=int(row.get('volume', 0) or 0),
+                    ))
+            
+            print(f"[KLine] Success, returning {len(klines)} klines ({total_pages} pages)", flush=True)
+            sys.stdout.flush()
+            
+            return KLineResponse(
+                success=True,
+                klines=klines,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        finally:
+            ctx.close()
+            print(f"[KLine] Context closed", flush=True)
+            sys.stdout.flush()
+            
+    except HTTPException:
+        raise
+    except ImportError:
+        raise HTTPException(status_code=500, detail="futu-api not installed")
+    except Exception as e:
+        import traceback
+        error_detail = f"[KLine] Exception: {e}"
+        print(error_detail, flush=True)
+        print(traceback.format_exc(), flush=True)
+        sys.stdout.flush()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))

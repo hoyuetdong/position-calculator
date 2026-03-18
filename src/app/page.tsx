@@ -458,7 +458,6 @@ export default function Home() {
   }, [settings, hydrated])
   
   const [ticker, setTicker] = useState('')
-  const [chartDays, setChartDays] = useState(2000)
   const [buyPoint, setBuyPoint] = useState('')
   const [stopLoss, setStopLoss] = useState('')
   const [quoteData, setQuoteData] = useState<QuoteData | null>(null)
@@ -586,7 +585,9 @@ export default function Home() {
         
         try {
           const quote = await getQuote(ticker, dataSource)
-          const klines = await getHistoricalKLines(ticker, chartDays, dataSource)
+          // Yahoo 最多 2000 日，富途最多 365 日
+          const maxDays = dataSource === 'futu' ? 365 : 2000
+          const klines = await getHistoricalKLines(ticker, maxDays, dataSource)
           
           setQuoteData(quote)
           
@@ -629,7 +630,7 @@ export default function Home() {
     
     const timer = setTimeout(fetchData, 500)
     return () => clearTimeout(timer)
-  }, [ticker, chartDays, dataSource])
+  }, [ticker, dataSource])
   
   // Calculations（避免 NaN：空字串當 0）
   const buyNum = parseFloat(buyPoint) || 0
@@ -1083,66 +1084,49 @@ export default function Home() {
                     className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
                   />
                 </div>
-
-                <div>
-                  <label className="text-sm text-muted-foreground">圖表日數</label>
-                  <select
-                    value={chartDays}
-                    onChange={(e) => setChartDays(parseInt(e.target.value))}
-                    disabled={!quoteData}
-                    className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono disabled:opacity-50"
-                  >
-                    <option value="100">100日</option>
-                    <option value="200">200日</option>
-                    <option value="300">300日</option>
-                    <option value="500">500日</option>
-                    <option value="730">730日 (2年)</option>
-                    <option value="1000">1000日 (約3年)</option>
-                    <option value="1500">1500日 (約4年)</option>
-                    <option value="2000">2000日 (約5年)</option>
-                  </select>
-                </div>
                 
-                <div>
-                  <label className="text-sm text-muted-foreground">買入價 ($)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={buyPoint}
-                    onChange={(e) => setBuyPoint(e.target.value)}
-                    placeholder="買入價"
-                    className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
-                  />
-                </div>
-                
-                <div>
-                  <label className="text-sm text-muted-foreground">止蝕價 ($)</label>
-                  <div className="flex gap-2">
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="text-sm text-muted-foreground">買入價 ($)</label>
                     <input
                       type="number"
                       step="0.01"
-                      value={stopLoss}
-                      onChange={(e) => setStopLoss(e.target.value)}
-                      placeholder="止蝕價"
+                      value={buyPoint}
+                      onChange={(e) => setBuyPoint(e.target.value)}
+                      placeholder="買入價"
                       className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
                     />
-                    {suggestedStopLoss && (
-                      <button 
-                        type="button"
-                        onClick={applySuggestedStopLoss}
-                        className="mt-1 px-3 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition-colors text-sm cursor-pointer"
-                        title={`建議: $${suggestedStopLoss.toFixed(2)} (${settings.atrMultiplier}x ATR)`}
-                      >
-                        <Info className="w-4 h-4" />
-                      </button>
-                    )}
                   </div>
+
+                  <div className="flex-1">
+                    <label className="text-sm text-muted-foreground">止蝕價 ($)</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={stopLoss}
+                        onChange={(e) => setStopLoss(e.target.value)}
+                        placeholder="止蝕價"
+                        className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
+                      />
+                      {suggestedStopLoss && (
+                        <button
+                          type="button"
+                          onClick={applySuggestedStopLoss}
+                          className="mt-1 px-3 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition-colors text-sm cursor-pointer"
+                          title={`建議: $${suggestedStopLoss.toFixed(2)} (${settings.atrMultiplier}x ATR)`}
+                        >
+                          <Info className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
                   {suggestedStopLoss && (
                     <p className="text-xs text-muted-foreground mt-1">
                       建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
                     </p>
                   )}
-                </div>
               </div>
               
               {/* Risk Info */}

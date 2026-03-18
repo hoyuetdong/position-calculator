@@ -31,6 +31,7 @@ export interface YahooKLine {
 
 /**
  * 標準化股票代碼
+ * 港股代碼喺 Yahoo Finance 係 4 位數字 (e.g., 0700.HK for 騰訊)
  */
 function normalizeSymbol(symbol: string): string {
   const upper = symbol.toUpperCase().trim()
@@ -40,7 +41,13 @@ function normalizeSymbol(symbol: string): string {
   }
 
   if (/^\d+$/.test(upper)) {
-    return `${upper}.HK`
+    // 港股：去除所有 leading zeros，再取最後4位（Yahoo 用 4 位數字）
+    const stripped = upper.replace(/^0+/, '') || '0'
+    // 如果係 5 位或更多，只取最後 4 位
+    const last4 = stripped.slice(-4)
+    // 不足 4 位嘅前面補 0
+    const padded = last4.padStart(4, '0')
+    return `${padded}.HK`
   }
 
   return upper

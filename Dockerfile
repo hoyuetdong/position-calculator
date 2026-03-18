@@ -23,6 +23,7 @@ RUN groupadd --system --gid 1001 nodejs && \
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/node_modules ./node_modules
 
 USER nextjs
 
