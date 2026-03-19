@@ -12,15 +12,65 @@ Environment variables:
   PORT — API server port (default: 8000)
 """
 import os
+import json
 import httpx
 import threading
 import time
+from dotenv import load_dotenv
+
+# 自動加載專案根目錄的 .env 檔案
+load_dotenv()
 from typing import List, Dict, Tuple, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, timezone
 
 _HKD_USD_FALLBACK = 1 / 7.78
+
+
+# ============================================================================
+# 智能檢測運行環境並選擇正確的 OpenD 主機地址
+# ============================================================================
+def _get_futu_host() -> str:
+    """
+    智能檢測運行環境並返回正確的 OpenD 主機地址。
+    
+    優先級：
+    1. 如果環境變數 FUTU_HOST 已設置，直接使用
+    2. 如果喺 Docker 容器內運行（檢測 /proc/self/cgroup 或環境變數），使用 host.docker.internal
+    3. 否則使用 127.0.0.1（本地運行）
+    """
+    # 優先使用環境變數
+    env_host = os.getenv("FUTU_HOST")
+    if env_host:
+        return env_host
+    
+    # 檢測是否喺 Docker 容器內運行
+    is_docker = False
+    
+    # 方法1: 檢查環境變數（Docker Compose 可能會設置）
+    if os.getenv("DOCKER_CONTAINER") == "true":
+        is_docker = True
+    
+    # 方法2: 檢查 cgroup（Linux/Mac Docker）
+    try:
+        if os.path.exists("/proc/self/cgroup"):
+            with open("/proc/self/cgroup", "r") as f:
+                content = f.read()
+                if "docker" in content or "containerd" in content:
+                    is_docker = True
+    except:
+        pass
+    
+    # 方法3: 檢查 /.dockerenv 文件（Docker 容器標記）
+    if os.path.exists("/.dockerenv"):
+        is_docker = True
+    
+    # 根據運行環境返回對應主機地址
+    if is_docker:
+        return "host.docker.internal"
+    else:
+        return "127.0.0.1"
 
 
 # ============================================================================
@@ -35,7 +85,7 @@ _PENDING_STOPS_FILE = Path(__file__).parent / "pending_stops.json"
 # Key: order_id (entry order)
 # Value: dict with stop_loss_price, quantity, symbol, stop_loss_placed_qty, filled_qty, etc.
 _pending_stop_orders: Dict[str, Dict] = {}
-_pending_stop_lock = threading.Lock()
+_pending_stop_lock = threading.RLock()  # 用 RLock 避免同一 thread 內重入死鎖
 
 # Background monitor thread (singleton)
 _monitor_thread: Optional[threading.Thread] = None
@@ -167,7 +217,8 @@ def _query_order_status_and_fill(host: str, port: int, order_id: str, acc_id: in
                     for _, row in data.iterrows():
                         if str(row.get("order_id", "")) == str(order_id):
                             status = str(row.get("order_status", "")).upper()
-                            fill_qty = int(float(row.get("fill_qty", 0) or 0))
+                            # Futu API column is dealt_qty, not fill_qty
+                            fill_qty = int(float(row.get("dealt_qty", 0) or 0))
                             order_qty = int(float(row.get("qty", 0) or 0))
                             
                             print(f"[StopMonitor] Order {order_id} status: {status}, fill_qty: {fill_qty}/{order_qty}")
@@ -227,11 +278,11 @@ def _place_stop_order(
         
         # Place STOP order
         ret, data = ctx.place_order(
-            code=futu_code,
             price=0,  # STOP orders don't use price, use aux_price as trigger
             qty=quantity,
+            code=futu_code,
+            trd_side=futu.TrdSide.SELL,
             order_type=futu.OrderType.STOP,
-            side=futu.TrdSide.SELL,
             trd_env=trd_env_enum,
             acc_id=acc_id,
             aux_price=stop_loss_price,  # Trigger price
@@ -318,8 +369,8 @@ def _monitor_loop(host: str, port: int, check_interval: float = 2.0):
                     total_qty = order_info["quantity"]
                     stop_loss_placed_qty = order_info.get("stop_loss_placed_qty", 0)
                     
-                    # Handle FILLED or PARTIAL_FILLED - 防重複關鍵！
-                    if status == "FILLED" or status == "PARTIAL_FILLED":
+                    # Handle FILLED or PARTIAL_FILLED - Futu uses FILLED_ALL
+                    if status == "FILLED" or status == "PARTIAL_FILLED" or status == "FILLED_ALL":
                         if fill_qty > 0:
                             # 計算有幾多新股數需要掛止蝕 (防止重複)
                             new_filled_qty = fill_qty - stop_loss_placed_qty
@@ -546,6 +597,8 @@ def _unlock_trade(ctx, trade_pwd: str) -> bool:
     """
     解鎖交易功能，需要輸入交易密碼
     """
+    import futu
+    
     if not trade_pwd:
         print("[Order] No trade password configured, skipping unlock")
         return True  # No password means no unlock needed
@@ -615,7 +668,6 @@ def _place_order(
         
         # Determine trade environment
         trd_env_enum = futu.TrdEnv.SIMULATE if trd_env.upper() == "SIMULATE" else futu.TrdEnv.REAL
-        print(f"[Order] Using trd_env: {trd_env_enum}")
         
         # Get account list
         ret_acc, acc_list = ctx.get_acc_list()
@@ -634,7 +686,6 @@ def _place_order(
             raise ValueError(f"No {trd_env} ACTIVE accounts found for market {market}")
         
         acc_id = acc_ids[0]
-        print(f"[Order] Using acc_id: {acc_id}")
         
         # Determine order type
         if order_type.upper() == "MARKET":
@@ -642,7 +693,7 @@ def _place_order(
             # Market order uses 0 as price
             price = 0
         else:
-            order_type_enum = futu.OrderType.LIMIT
+            order_type_enum = futu.OrderType.NORMAL
         
         # Determine side
         if side.upper() == "BUY":
@@ -652,11 +703,11 @@ def _place_order(
         
         # Place the order
         ret, data = ctx.place_order(
-            code=futu_code,
             price=price,
             qty=quantity,
+            code=futu_code,
+            trd_side=side_enum,
             order_type=order_type_enum,
-            side=side_enum,
             trd_env=trd_env_enum,
             acc_id=acc_id,
         )
@@ -851,16 +902,21 @@ app = FastAPI(title="Futu Broker API", version="1.0.0")
 @app.on_event("startup")
 async def startup_event():
     """App啟動時 load 舊有 pending stops 並啟動 background monitor."""
+    print("[Startup] Step 1: Loading pending stops...")
     # 從 file load 舊有既 pending stop orders
     _init_pending_stops_from_file()
     
+    print("[Startup] Step 2: Setting trade env...")
     # 初始化交易環境 (從環境變數讀取，預設SIMULATE)
     env_from_env = os.getenv("TRADE_ENV", "SIMULATE").upper()
     _set_trade_env(env_from_env)
     
-    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    print("[Startup] Step 3: Starting background monitor...")
+    host = _get_futu_host()
     port = int(os.getenv("FUTU_PORT", "11111"))
+    print(f"[Startup] Host: {host}, Port: {port}")
     start_background_monitor(host, port)
+    print("[Startup] Done!")
 
 
 @app.on_event("shutdown")
@@ -992,7 +1048,7 @@ def get_positions():
     Converts HKD prices to USD.
     """
     # Get config from environment
-    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    host = _get_futu_host()
     port = int(os.getenv("FUTU_PORT", "11111"))
     trade_pwd = os.getenv("FUTU_TRADE_PWD", "")
 
@@ -1032,7 +1088,7 @@ def get_account_balance():
     Get account balance in USD from Futu/Moomoo US account.
     """
     # Get config from environment
-    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    host = _get_futu_host()
     port = int(os.getenv("FUTU_PORT", "11111"))
     trade_pwd = os.getenv("FUTU_TRADE_PWD", "")
 
@@ -1081,7 +1137,7 @@ def place_order(order: OrderRequest):
     - remark: Optional order note
     """
     # Get config from environment
-    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    host = _get_futu_host()
     port = int(os.getenv("FUTU_PORT", "11111"))
     trade_pwd = os.getenv("FUTU_TRADE_PWD", "")
     
@@ -1203,7 +1259,7 @@ def get_stock_quote(codes: str):
     
     注意：某些市場需要先 subscribe 先可以拎到行情
     """
-    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    host = _get_futu_host()
     port = int(os.getenv("FUTU_PORT", "11111"))
     
     import sys
@@ -1441,7 +1497,7 @@ def get_stock_kline(
     days: 天數 (默認 365，最大 2000)
     ktype: K線類型 DAY / WEEK / MONTH (默認 DAY)
     """
-    host = os.getenv("FUTU_HOST", "127.0.0.1")
+    host = _get_futu_host()
     port = int(os.getenv("FUTU_PORT", "11111"))
     
     import sys

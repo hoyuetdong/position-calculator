@@ -936,19 +936,47 @@ export default function Home() {
               </p>
             </div>
             <div>
-              <label className="text-sm text-muted-foreground">Default Risk %</label>
-              <input
-                type="text"
-                value={settings.defaultRiskPercent || ''}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === '' || /^\d*\.?\d*$/.test(val)) {
-                    setSettings({ ...settings, defaultRiskPercent: val === '' ? 0.3 : parseFloat(val) || 0.3 })
-                  }
-                }}
-                className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="0.3"
-              />
+              <label className="text-sm text-muted-foreground flex items-center gap-2">
+                Default Risk %
+                <span className="text-xs text-muted-foreground/50">(每筆交易風險額)</span>
+              </label>
+              <div className="flex items-center gap-3 mt-1">
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="5"
+                  value={settings.defaultRiskPercent}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    if (!isNaN(val) && val > 0) {
+                      setSettings({ ...settings, defaultRiskPercent: Math.min(5, Math.max(0.1, val)) })
+                    }
+                  }}
+                  className="w-24 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-center font-mono"
+                />
+                <span className="text-muted-foreground">%</span>
+                <span className="text-xs text-muted-foreground">
+                  (帳戶 ${settings.accountSize.toLocaleString()} × {settings.defaultRiskPercent}% = ${(settings.accountSize * settings.defaultRiskPercent / 100).toFixed(0)} 每筆風險)
+                </span>
+              </div>
+              {/* Quick presets */}
+              <div className="flex gap-2 mt-2">
+                {[0.3, 0.5, 1, 2].map(val => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setSettings({ ...settings, defaultRiskPercent: val })}
+                    className={`px-3 py-1 text-xs rounded-full border transition-colors cursor-pointer ${
+                      settings.defaultRiskPercent === val 
+                        ? 'bg-primary text-primary-foreground border-primary' 
+                        : 'border-border hover:border-primary/50'
+                    }`}
+                  >
+                    {val}%
+                  </button>
+                ))}
+              </div>
             </div>
             <div>
               <label className="text-sm text-muted-foreground">ATR 倍數 (止蝕)</label>

@@ -12,36 +12,59 @@
 
 ## 運行
 
-Docker 部署：
+### 方式一：Docker 部署（推薦）
+
+一次過運行前端 + 後端，自動連接本地 FutuOpenD。
 
 ```bash
 cd position-calculator
 docker-compose up -d
 ```
 
-本地開發：
+### 方式二：本地開發
 
+需要同時運行前端和後端。
+
+**Terminal 1 - 前端 + 後端：**
 ```bash
 cd position-calculator
-npm install
-npm run dev
+npm run dev & python3 backend/main.py
 ```
 
 訪問 `http://localhost:3000`
 
+### 運行方式對比
+
+| 方式 | 前端 (Port 3000) | 後端 (Port 8000) | 富途 OpenD 連接 |
+|------|-----------------|-----------------|----------------|
+| Docker | ✅ | ✅ | host.docker.internal |
+| 本地 | ✅ (同一 Terminal) | ✅ | 127.0.0.1 |
+
+兩種方式都可以同時連接富途拎 data。
+
 ## 配置
 
 ```bash
-cp .env.example .env
+cp .env.example .env  # 如果冇 .env 檔
 ```
 
 編輯 `.env`：
 
 ```env
-FUTU_HOST=host.docker.internal
+# 富途登入
+FUTU_LOGIN_ACCOUNT=你的牛牛ID
+FUTU_LOGIN_PWD_MD5=密碼MD5
+
+# OpenD 連接（留空則自動檢測：Docker 用 host.docker.internal，本地用 127.0.0.1）
+FUTU_HOST=
 FUTU_PORT=11111
+FUTU_WS_PORT=8081
+
+# 交易密碼（富途功能需要）
 FUTU_TRADE_PWD=你的交易密碼
 ```
+
+> 提示：FUTU_HOST 留空即可，系統會自動檢測運行環境選擇正確嘅連接方式。
 
 ## 富途功能（可選）
 
@@ -54,16 +77,16 @@ FUTU_TRADE_PWD=你的交易密碼
 
 ## 停止
 
-Docker 部署：
+### Docker 部署
 
 ```bash
 docker-compose stop    # 停止（唔刪除 container）
 docker-compose down    # 停止並刪除 container
 ```
 
-本地開發：
+### 本地開發
 
-喺 terminal 按 `Ctrl + C` 停止 dev server。
+喺 Terminal 按 `Ctrl + C` 停止（會同時停止前端和後端）。
 
 ## 更新
 
