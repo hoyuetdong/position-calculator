@@ -52,6 +52,29 @@ FUTU_TRADE_PWD=你的交易密碼
 3. 首次使用需配置 `.env` 並訪問 `http://localhost:8081` 完成 SMS 驗證
 4. OpenD 設定中開啟 WebSocket（`websocket_port=33333`）
 
+## 停止
+
+Docker 部署：
+
+```bash
+docker-compose stop    # 停止（唔刪除 container）
+docker-compose down    # 停止並刪除 container
+```
+
+本地開發：
+
+喺 terminal 按 `Ctrl + C` 停止 dev server。
+
+## 更新
+
+更新專案代碼後，需重新 build：
+
+```bash
+docker-compose up --build -d
+```
+
+---
+
 ## 股票代碼
 
 | 市場 | 格式 | 例子 |
