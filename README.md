@@ -8,17 +8,9 @@
 - 1R/2R/3R 目標價
 - 風險警告
 - 支援港股、美股、A股
-- ## 富途功能
-
-需要啟動 OpenD（富途行情網關）：
-- Windows/Mac: [下載 FutuOpenD](https://www.futuhk.com/support/courseDetail/1140)
-- Docker: `futuopend` container 已自動啟動
-
-配置好 `.env` 後訪問 `http://localhost:8081` 完成 SMS 驗證。
+- 富途持倉同步（可選）
 
 ## 運行
-
-### Docker (推薦)
 
 ```bash
 docker-compose up -d
@@ -26,19 +18,30 @@ docker-compose up -d
 
 訪問 `http://localhost:3000`
 
-### 本地開發
+本地開發：`npm run dev`
+
+## 配置
 
 ```bash
-npm run dev
+cp .env.example .env
 ```
 
-## 配置 (.env)
+編輯 `.env`：
 
 ```env
-FUTU_LOGIN_ACCOUNT=富途ID
-FUTU_LOGIN_PWD_MD5=密碼MD5
-FUTU_TRADE_PWD=交易密碼
+FUTU_HOST=host.docker.internal
+FUTU_PORT=11111
+FUTU_TRADE_PWD=你的交易密碼
 ```
+
+## 富途功能（可選）
+
+**需要本地安裝 FutuOpenD**，docker-compose 會透過 `host.docker.internal` 連接本機既 OpenD。
+
+1. [下載並安裝 FutuOpenD](https://www.futuhk.com/support/courseDetail/1140)
+2. 啟動 OpenD 並登入
+3. 首次使用需配置 `.env` 並訪問 `http://localhost:8081` 完成 SMS 驗證
+4. OpenD 設定中開啟 WebSocket（`websocket_port=33333`）
 
 ## 股票代碼
 
