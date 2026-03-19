@@ -8,7 +8,13 @@
 - 1R/2R/3R 目標價
 - 風險警告
 - 支援港股、美股、A股
-- 富途持倉同步
+- ## 富途功能
+
+需要啟動 OpenD（富途行情網關）：
+- Windows/Mac: [下載 FutuOpenD](https://www.futuhk.com/support/courseDetail/1140)
+- Docker: `futuopend` container 已自動啟動
+
+配置好 `.env` 後訪問 `http://localhost:8081` 完成 SMS 驗證。
 
 ## 運行
 
