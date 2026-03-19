@@ -12,13 +12,22 @@
 
 ## 運行
 
+Docker 部署：
+
 ```bash
+cd position-calculator
 docker-compose up -d
 ```
 
-訪問 `http://localhost:3000`
+本地開發：
 
-本地開發：`npm run dev`
+```bash
+cd position-calculator
+npm install
+npm run dev
+```
+
+訪問 `http://localhost:3000`
 
 ## 配置
 
