@@ -5,7 +5,7 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'VCP Position Calculator - Yahoo Finance 版',
+  title: 'Position Calculator',
   description: '專業交易倉位計算器 - VCP/CANSLIM 風格 (Yahoo Finance API)',
 }
 
