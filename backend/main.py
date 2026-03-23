@@ -441,15 +441,23 @@ def _monitor_loop(host: str, port: int, check_interval: float = 2.0):
                             _remove_pending_stop_order(entry_order_id)
                     
                     elif status in ["CANCELLED", "CANCELLED_PART", "FAILED", "REJECTED"]:
-                        # Entry order failed/cancelled (可能全部取消或部分取消)
-                        # 只有當所有已成交既股數都已經掛好止蝕單，先可以移除
-                        if fill_qty == stop_loss_placed_qty:
+                        # Entry order failed/cancelled
+                        if fill_qty == 0:
+                            # 完全冇成交，取消咗就取消，移除 pending
+                            print(f"[StopMonitor] Entry order {entry_order_id} status: {status}, no fills, removing from pending")
+                            _remove_pending_stop_order(entry_order_id)
+                        elif fill_qty == stop_loss_placed_qty:
+                            # 所有已成交股數都已經掛好止蝕單，可以移除
                             print(f"[StopMonitor] Entry order {entry_order_id} status: {status}, all filled shares ({fill_qty}) have stop orders placed, removing from pending")
                             _remove_pending_stop_order(entry_order_id)
                         else:
-                            # 部分成交但未全部掛好止蝕單，繼續監控（或者可以視為失敗，等人工處理）
-                            print(f"[StopMonitor] Entry order {entry_order_id} status: {status}, filled: {fill_qty}, stop placed: {stop_loss_placed_qty}. NOT removing - may need manual intervention")
-                            # Keep in pending for safety - don't auto remove
+                            # 部分成交但未全部掛好止蝕單，標記為需要人工處理
+                            print(f"[StopMonitor] Entry order {entry_order_id} status: {status}, filled: {fill_qty}, stop placed: {stop_loss_placed_qty}. Marking as NEED_MANUAL.")
+                            _update_pending_stop_order(entry_order_id, {
+                                "status": "CANCELLED_NEED_MANUAL",
+                                "cancelled_at": datetime.now(timezone.utc).isoformat()
+                            })
+                            _remove_pending_stop_order(entry_order_id)
                     
                     # Else: SUBMITTED, etc - keep monitoring
             
