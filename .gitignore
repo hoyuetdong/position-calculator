@@ -41,6 +41,9 @@ docker/*.pem
 # futu openD config (local)
 futu_data/
 
+# futu openD config (VPS) - CONTAINS SENSITIVE CREDENTIALS!
+docker/opend_config.ini
+
 # vercel
 .vercel
 

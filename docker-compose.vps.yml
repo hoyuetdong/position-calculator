@@ -30,6 +30,7 @@ services:
     volumes:
       - opend_data:/home/opend/FutuOpenD/data
       - ${OPEN_D_KEY_PATH:-./docker/keys}:/home/opend/FutuOpenD/keys:ro
+      - ./docker/opend_config.ini:/home/opend/FutuOpenD/config/opend_config.ini:ro
     restart: unless-stopped
     networks:
       - vcp-network
