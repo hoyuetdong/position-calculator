@@ -84,6 +84,8 @@ cd /opt/vcp-calculator
 git clone https://github.com/hoyuetdong/position-calculator.git .
 ```
 
+### Step 4: 生成 RSA 密鑰對
+
 ```bash
 cd /opt/futuopend/keys
 
@@ -103,30 +105,6 @@ chown -R 1000:1000 /opt/futuopend/keys
 
 # 上傳公鑰到富途後台
 # https://openapi.futunn.com -> 開放接口 -> RSA 密鑰管理 -> 上傳 public_key.pem
-```
-
-### Step 4: 生成 RSA 密鑰對
-
-```bash
-cd /opt/vcp-calculator
-
-# 複製環境變量模板
-cp .env.vps.example .env.vps
-
-# 編輯配置
-nano .env.vps
-```
-
-填入以下內容：
-```env
-FUTU_TRADE_PWD=你的富途交易密碼
-OPEN_D_KEY_PATH=/opt/futuopend/keys
-APP_PASSWORD=你的訪問密碼（防黑客）
-
-# ⚠️ 安全建議：
-# - APP_PASSWORD 起碼 16 位，包含大小寫+數字+特殊符號
-# - 可以用密碼管理器生成：https://bitwarden.com/
-# - 例如：Kj9#mNp$2xLq@7wBz
 ```
 
 ### Step 5: 配置環境變量
@@ -217,7 +195,7 @@ nginx -t
 systemctl reload nginx
 ```
 
-### Step 8: 申請 SSL 證書
+### Step 9: 申請 SSL 證書
 
 ```bash
 # 確認 DNS 已解析到 VPS IP
@@ -230,7 +208,7 @@ certbot --nginx -d your-domain.com
 certbot renew --dry-run
 ```
 
-### Step 9: 創建密碼認證
+### Step 10: 創建密碼認證
 
 ```bash
 # 創建密碼檔
@@ -238,12 +216,27 @@ htpasswd -c /etc/nginx/.htpasswd admin
 
 # 之後添加其他用戶
 htpasswd /etc/nginx/.htpasswd another_user
+```
 
-# 修改 Nginx 配置指向正確路徑（如果需要）
-nano /etc/nginx/sites-available/vcp-calculator
-# 確認 auth_basic_user_file /etc/nginx/.htpasswd;
+⚠️ **重要：確認 Nginx 配置已啟用密碼認證**
 
-# 重新載入
+編輯 Nginx 配置，確保有以下兩行：
+
+```nginx
+server {
+    # ... 其他配置 ...
+
+    auth_basic "VCP Position Calculator - Login Required";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    # ... 其他配置 ...
+}
+```
+
+如果冇呢兩行，就算set好密碼檔都唔會彈登入框。
+
+```bash
+# 確認後重新載入
 systemctl reload nginx
 ```
 
@@ -263,6 +256,26 @@ systemctl reload nginx
 - [x] RSA 密鑰通過 volume mount（唔打包進 image）
 - [x] .env.vps 加入 .gitignore
 - [x] RSA 私鑰權限設定 600（只有 owner 可讀）
+
+### ⚠️ Docker 與 UFW 衝突警告
+
+Docker 預設會直接修改 iptables，**繞過 UFW** 暴露端口！
+
+喺 `docker-compose.vps.yml` 入面，所有暴露俾 Nginx 嘅 port mapping **必須寫死 127.0.0.1**：
+
+```yaml
+services:
+  backend:
+    ports:
+      - "127.0.0.1:3000:3000"  # ✅ 正確，街外人直擊 IP 都入唔到
+      # - "3000:3000"          # ❌ 危險，Docker 會穿透 UFW 暴露出去
+
+  frontend:
+    ports:
+      - "127.0.0.1:3001:3001"  # ✅ 正確
+```
+
+如果唔寫死 `127.0.0.1`，就算 UFW 設定晒 `default deny incoming`，外面嘅人都可以直接 `curl http://VPS_IP:3000` 訪問到你嘅服務。
 
 ### Nginx 安全強化（可選但推薦）
 ```bash
