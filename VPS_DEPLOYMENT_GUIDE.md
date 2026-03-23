@@ -52,23 +52,37 @@ mkdir -p /opt/vcp-calculator
 mkdir -p /opt/futuopend/keys
 ```
 
-### Step 2: 準備 OpenD
+### Step 2: 下載 FutuOpenD Linux CLI
+
+喺 VPS 上直接下載：
 
 ```bash
-# 喺你本地電腦：
-# 1. 去 https://openapi.futunn.com/futu-api-doc/en/opend/opend-install.html 下載 Linux CLI 版本
-# 2. 將 FutuOpenD_Linux.tar.gz 放到專案根目錄
-
-# 然後上傳到 VPS
-# 方法 A: rsync
-rsync -avz ./position-calculator/ user@vps:/opt/vcp-calculator/
-
-# 方法 B: Git
 cd /opt/vcp-calculator
-git clone https://github.com/your-username/position-calculator.git .
+
+# 下載 FutuOpenD Linux CLI
+# 去呢度下載：https://openapi.futunn.com/futu-api-doc/en/opend/opend-install.html
+# 選擇 "Linux CLI" 版本，然後上傳到 VPS
+
+# 方法 A: 如果有 direct download link
+wget https://example.com/FutuOpenD_Linux_CLI.tar.gz  # 替換為實際連結
+
+# 方法 B: 從本地 scp 過來
+# scp /path/to/FutuOpenD_Linux_CLI.tar.gz root@your-vps-ip:/opt/vcp-calculator/
+
+# 解壓到正確位置
+tar -xzf FutuOpenD_Linux_CLI.tar.gz
+mkdir -p /opt/futuopend
+mv FutuOpenD_Linux_CLI/* /opt/futuopend/
 ```
 
-### Step 3: 生成 RSA 密鑰對
+### Step 3: Clone 项目到 VPS
+
+```bash
+cd /opt/vcp-calculator
+
+# Clone 项目
+git clone https://github.com/hoyuetdong/position-calculator.git .
+```
 
 ```bash
 cd /opt/futuopend/keys
@@ -91,7 +105,7 @@ chown -R 1000:1000 /opt/futuopend/keys
 # https://openapi.futunn.com -> 開放接口 -> RSA 密鑰管理 -> 上傳 public_key.pem
 ```
 
-### Step 4: 配置環境變量
+### Step 4: 生成 RSA 密鑰對
 
 ```bash
 cd /opt/vcp-calculator
@@ -115,7 +129,31 @@ APP_PASSWORD=你的訪問密碼（防黑客）
 # - 例如：Kj9#mNp$2xLq@7wBz
 ```
 
-### Step 5: 準備 OpenD 配置
+### Step 5: 配置環境變量
+
+```bash
+cd /opt/vcp-calculator
+
+# 複製環境變量模板
+cp .env.vps.example .env.vps
+
+# 編輯配置
+nano .env.vps
+```
+
+填入以下內容：
+```env
+FUTU_TRADE_PWD=你的富途交易密碼
+OPEN_D_KEY_PATH=/opt/futuopend/keys
+APP_PASSWORD=你的訪問密碼（防黑客）
+
+# ⚠️ 安全建議：
+# - APP_PASSWORD 起碼 16 位，包含大小寫+數字+特殊符號
+# - 可以用密碼管理器生成：https://bitwarden.com/
+# - 例如：Kj9#mNp$2xLq@7wBz
+```
+
+### Step 6: 配置 OpenD
 
 ```bash
 cd /opt/vcp-calculator
@@ -127,7 +165,7 @@ nano docker/opend_config.ini
 
 填入你的富途 App ID 同 Secret Key。
 
-### Step 6: 啟動服務
+### Step 7: 啟動服務
 
 ```bash
 cd /opt/vcp-calculator
@@ -158,7 +196,7 @@ docker compose -f docker-compose.vps.yml up -d
 docker compose -f docker-compose.vps.yml ps
 ```
 
-### Step 7: 配置 Nginx + SSL
+### Step 8: 配置 Nginx + SSL
 
 ```bash
 cd /opt/vcp-calculator
