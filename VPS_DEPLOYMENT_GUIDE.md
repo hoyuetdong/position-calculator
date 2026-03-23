@@ -24,7 +24,7 @@ position-calculator/
 
 ## 部署流程（VPS）
 
-### Step 1: 準備工作
+### Step 1: 基礎安全設定
 
 ```bash
 # 登入 VPS
@@ -32,7 +32,20 @@ ssh root@your-vps-ip
 
 # 安裝必要軟件
 apt update && apt upgrade -y
-apt install -y docker.io docker-compose nginx certbot python3-certbot-nginx apache2-utils
+apt install -y docker.io docker-compose nginx certbot python3-certbot-nginx apache2-utils ufw
+
+# 設定 UFW Firewall（只開放必要 port）
+ufw default deny incoming    # 預設拒絕所有入站
+ufw allow 22/tcp             # SSH（你自己用）
+ufw allow 443/tcp            # HTTPS
+ufw enable
+
+# SSH 強化：禁用密碼登入，改用 Key（如果未設定）
+nano /etc/ssh/sshd_config
+# 確保以下設定：
+#   PasswordAuthentication no
+#   PubkeyAuthentication yes
+systemctl restart sshd
 
 # 創建應用目錄
 mkdir -p /opt/vcp-calculator
@@ -95,6 +108,11 @@ nano .env.vps
 FUTU_TRADE_PWD=你的富途交易密碼
 OPEN_D_KEY_PATH=/opt/futuopend/keys
 APP_PASSWORD=你的訪問密碼（防黑客）
+
+# ⚠️ 安全建議：
+# - APP_PASSWORD 起碼 16 位，包含大小寫+數字+特殊符號
+# - 可以用密碼管理器生成：https://bitwarden.com/
+# - 例如：Kj9#mNp$2xLq@7wBz
 ```
 
 ### Step 5: 準備 OpenD 配置
@@ -195,12 +213,35 @@ systemctl reload nginx
 
 ## 安全檢查清單
 
+### 網絡安全
+- [x] UFW Firewall 只開放 22 (SSH) + 443 (HTTPS)
+- [x] SSH 禁用密碼登入，改用 Key
 - [x] OpenD 只監聽 Docker 內部網絡（唔暴露 port）
 - [x] Backend/Frontend 只監聽 127.0.0.1
 - [x] Nginx 配置 Basic Auth
 - [x] 使用 HTTPS (Let's Encrypt)
+
+### 密鑰安全
 - [x] RSA 密鑰通過 volume mount（唔打包進 image）
 - [x] .env.vps 加入 .gitignore
+- [x] RSA 私鑰權限設定 600（只有 owner 可讀）
+
+### Nginx 安全強化（可選但推薦）
+```bash
+# 在 /etc/nginx/sites-available/vcp-calculator 加入以下 header：
+nano /etc/nginx/sites-available/vcp-calculator
+
+# 在 server block 內加入：
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-XSS-Protection "1; mode=block" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+# 禁用目錄列出
+autoindex off;
+
+systemctl reload nginx
+```
 
 ---
 
@@ -311,3 +352,20 @@ docker compose up -d
 建議 VPS 配置：
 - 最低：1 CPU / 1GB RAM（可能會 swap）
 - 推薦：2 CPU / 2GB RAM（流暢運行）
+
+---
+
+## ⚠️ 安全提醒
+
+### 一定要做（防被hack）
+1. **UFW Firewall** - 只開 22 + 443 port
+2. **SSH Key 登入** - 禁用密碼login
+3. **強密碼** - APP_PASSWORD 起碼 16 位
+
+### 敏感資訊（唔好 commit）
+確保以下檔案 **唔會** commit 到 GitHub：
+- `.env.vps` - 包含交易密碼
+- `docker/opend_config.ini` - 包含 App ID/Secret
+- `docker/*.tar.gz` - OpenD binary
+
+檢查你的 `.gitignore` 包含曉呢啲。
