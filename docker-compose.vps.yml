@@ -1,0 +1,100 @@
+# =============================================================================
+# VPS 部署版本 - Position Calculator + OpenD
+# =============================================================================
+# 使用方法：
+#   docker compose -f docker-compose.vps.yml up -d
+#
+# 環境變量：
+#   cp .env.vps.example .env.vps
+#   nano .env.vps  # 填入你的設定
+#
+# =============================================================================
+
+services:
+  # ==========================================================================
+  # 富途 OpenD (CLI 版本 - 唔需要 GUI/VNC)
+  # ==========================================================================
+  # 首次啟動需要做 SMS 驗證：
+  #   docker compose -f docker-compose.vps.yml logs futuopend
+  #   搵到類似 "Please visit: https://xxx.futunn.com/verify/xxx" 嘅連結
+  #   喺瀏覽器打開完成驗證
+  # ==========================================================================
+  futuopend:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.opend
+    container_name: futuopend
+    # ⚠️ 安全重點：唔好暴露 ports俾公網！
+    # Backend 透過 Docker network 內部訪問 (futuopend:11111)
+    # 如果暴露俾公網，黑客可以亂咁落單！
+    volumes:
+      - opend_data:/home/opend/FutuOpenD/data
+      - ${OPEN_D_KEY_PATH:-./docker/keys}:/home/opend/FutuOpenD/keys:ro
+    restart: unless-stopped
+    networks:
+      - vcp-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "11111"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ==========================================================================
+  # Python Backend (FastAPI)
+  # ==========================================================================
+  backend:
+    build: ./backend
+    container_name: vcp-backend
+    ports:
+      - "127.0.0.1:8000:8000"  # 只監聽本地 loopback，Nginx 從本地 proxy
+    environment:
+      - FUTU_HOST=futuopend
+      - FUTU_PORT=11111
+      - FUTU_TRADE_PWD=${FUTU_TRADE_PWD}
+      - PORT=8000
+    depends_on:
+      futuopend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - vcp-network
+
+  # ==========================================================================
+  # Next.js Frontend
+  # ==========================================================================
+  vcp-calculator:
+    build: .
+    container_name: vcp-calculator
+    ports:
+      - "127.0.0.1:3000:3000"  # 只監聽本地 loopback，Nginx 從本地 proxy
+    environment:
+      - NODE_ENV=production
+      - PYTHON_API_URL=http://backend:8000
+      - APP_PASSWORD=${APP_PASSWORD:-}  # 訪問密碼（見下方説明）
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - vcp-network
+
+volumes:
+  opend_data:
+    driver: local
+
+networks:
+  vcp-network:
+    driver: bridge
+
+# =============================================================================
+# 安全設定説明
+# =============================================================================
+# 1. 所有 service ports 只監聽 127.0.0.1，防止被公網直接訪問
+# 2. OpenD 完全唔暴露 port，只能透過 internal Docker network 訪問
+# 3. 請確保 Nginx 配置正確，使用 HTTPS + Basic Auth 或其他認證方式
+#
+# 建議的 Nginx 配置：
+#   - 強制 HTTPS
+#   - 添加 Basic Auth 密碼保護
+#   - 配置 SSL 證書 (Let's Encrypt)
+# =============================================================================

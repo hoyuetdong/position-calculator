@@ -1,0 +1,313 @@
+# =============================================================================
+# VPS 部署完整指南
+# Position Calculator + OpenD
+# =============================================================================
+
+## 目錄結構
+
+```
+position-calculator/
+├── docker-compose.yml          # 本地版本（唔改）
+├── docker-compose.vps.yml      # VPS 版本（新加）
+├── .env.example                # 本地 .env（唔改）
+├── .env.vps.example            # VPS .env 模板（新加）
+├── backend/
+│   └── Dockerfile               # Backend Docker 鏡像
+├── docker/
+│   ├── Dockerfile.opend        # OpenD CLI Dockerfile（新加）
+│   ├── opend_config.ini         # OpenD 配置模板（新加）
+│   └── nginx.conf.example       # Nginx 配置模板（新加）
+└── Dockerfile                  # Frontend Docker 鏡像
+```
+
+---
+
+## 部署流程（VPS）
+
+### Step 1: 準備工作
+
+```bash
+# 登入 VPS
+ssh root@your-vps-ip
+
+# 安裝必要軟件
+apt update && apt upgrade -y
+apt install -y docker.io docker-compose nginx certbot python3-certbot-nginx apache2-utils
+
+# 創建應用目錄
+mkdir -p /opt/vcp-calculator
+mkdir -p /opt/futuopend/keys
+```
+
+### Step 2: 準備 OpenD
+
+```bash
+# 喺你本地電腦：
+# 1. 去 https://openapi.futunn.com/futu-api-doc/en/opend/opend-install.html 下載 Linux CLI 版本
+# 2. 將 FutuOpenD_Linux.tar.gz 放到專案根目錄
+
+# 然後上傳到 VPS
+# 方法 A: rsync
+rsync -avz ./position-calculator/ user@vps:/opt/vcp-calculator/
+
+# 方法 B: Git
+cd /opt/vcp-calculator
+git clone https://github.com/your-username/position-calculator.git .
+```
+
+### Step 3: 生成 RSA 密鑰對
+
+```bash
+cd /opt/futuopend/keys
+
+# 生成私鑰 (2048-bit)
+openssl genrsa -out private_key.pem 2048
+
+# 生成公鑰
+openssl rsa -in private_key.pem -pubout -out public_key.pem
+
+# 設置權限（私鑰必須只有 owner 可以讀寫）
+chmod 600 private_key.pem
+chmod 644 public_key.pem
+
+# ⚠️ 重要：設置 folder owner 為 1000（Docker 內 opend 用戶的 UID）
+# 否則 Docker container 內會出現 "Permission Denied" 讀取私鑰
+chown -R 1000:1000 /opt/futuopend/keys
+
+# 上傳公鑰到富途後台
+# https://openapi.futunn.com -> 開放接口 -> RSA 密鑰管理 -> 上傳 public_key.pem
+```
+
+### Step 4: 配置環境變量
+
+```bash
+cd /opt/vcp-calculator
+
+# 複製環境變量模板
+cp .env.vps.example .env.vps
+
+# 編輯配置
+nano .env.vps
+```
+
+填入以下內容：
+```env
+FUTU_TRADE_PWD=你的富途交易密碼
+OPEN_D_KEY_PATH=/opt/futuopend/keys
+APP_PASSWORD=你的訪問密碼（防黑客）
+```
+
+### Step 5: 準備 OpenD 配置
+
+```bash
+cd /opt/vcp-calculator
+
+# 複製並編輯 OpenD 配置
+cp docker/opend_config.ini docker/opend_config.ini.bak
+nano docker/opend_config.ini
+```
+
+填入你的富途 App ID 同 Secret Key。
+
+### Step 6: 啟動服務
+
+```bash
+cd /opt/vcp-calculator
+
+# 首次啟動（只啟動 OpenD）
+docker compose -f docker-compose.vps.yml up -d futuopend
+
+# 睇日誌，等待 SMS 驗證連結
+docker compose -f docker-compose.vps.yml logs -f futuopend
+```
+
+#### 首次登入（SMS 驗證）
+
+```bash
+# 睇日誌輸出，搵到類似呢個：
+# [INFO] Please visit: https://nnn.futunn.com/xxx/verify?code=xxxxx
+
+# 複製呢個連結，喺你本地瀏覽器打開
+# 完成 SMS 驗證後，OpenD 會自動登入
+```
+
+驗證成功後：
+```bash
+# 繼續啟動其他服務
+docker compose -f docker-compose.vps.yml up -d
+
+# 確認所有服務運行正常
+docker compose -f docker-compose.vps.yml ps
+```
+
+### Step 7: 配置 Nginx + SSL
+
+```bash
+cd /opt/vcp-calculator
+
+# 複製 Nginx 配置
+cp docker/nginx.conf.example /etc/nginx/sites-available/vcp-calculator
+nano /etc/nginx/sites-available/vcp-calculator
+# 將 your-domain.com 改為你的域名
+
+# 啟用站點
+ln -sf /etc/nginx/sites-available/vcp-calculator /etc/nginx/sites-enabled/vcp-calculator
+rm -f /etc/nginx/sites-enabled/default
+
+# 測試配置
+nginx -t
+
+# 重新載入
+systemctl reload nginx
+```
+
+### Step 8: 申請 SSL 證書
+
+```bash
+# 確認 DNS 已解析到 VPS IP
+# A record: your-domain.com -> VPS_IP
+
+# 申請 Let's Encrypt 免費 SSL
+certbot --nginx -d your-domain.com
+
+# 自動續期測試
+certbot renew --dry-run
+```
+
+### Step 9: 創建密碼認證
+
+```bash
+# 創建密碼檔
+htpasswd -c /etc/nginx/.htpasswd admin
+
+# 之後添加其他用戶
+htpasswd /etc/nginx/.htpasswd another_user
+
+# 修改 Nginx 配置指向正確路徑（如果需要）
+nano /etc/nginx/sites-available/vcp-calculator
+# 確認 auth_basic_user_file /etc/nginx/.htpasswd;
+
+# 重新載入
+systemctl reload nginx
+```
+
+---
+
+## 安全檢查清單
+
+- [x] OpenD 只監聽 Docker 內部網絡（唔暴露 port）
+- [x] Backend/Frontend 只監聽 127.0.0.1
+- [x] Nginx 配置 Basic Auth
+- [x] 使用 HTTPS (Let's Encrypt)
+- [x] RSA 密鑰通過 volume mount（唔打包進 image）
+- [x] .env.vps 加入 .gitignore
+
+---
+
+## 日常維護
+
+### 睇日誌
+```bash
+# 所有服務
+docker compose -f docker-compose.vps.yml logs -f
+
+# 指定服務
+docker compose -f docker-compose.vps.yml logs -f backend
+docker compose -f docker-compose.vps.yml logs -f futuopend
+```
+
+### 更新代碼
+```bash
+cd /opt/vcp-calculator
+git pull
+docker compose -f docker-compose.vps.yml up --build -d
+```
+
+### 重啟服務
+```bash
+docker compose -f docker-compose.vps.yml restart
+```
+
+### 停止服務
+```bash
+docker compose -f docker-compose.vps.yml down
+```
+
+---
+
+## 故障排除
+
+### OpenD 啟動失敗："error while loading shared libraries"
+
+如果你見到呢個 error：
+```
+error while loading shared libraries: libxxx.so
+```
+
+解決方法：確認 `docker/Dockerfile.opend` 用緊 `FROM ubuntu:22.04` 而唔係 `python:slim`，並且安裝咗 `ca-certificates libstdc++6 libgcc-s1`。
+
+### OpenD 讀取不到 RSA Key："Permission Denied"
+
+如果你見到呢個 error：
+```
+Permission Denied: ./keys/private_key.pem
+```
+
+解決方法：喺 VPS 執行：
+```bash
+chown -R 1000:1000 /opt/futuopend/keys
+chmod 600 /opt/futuopend/keys/private_key.pem
+```
+
+### OpenD 連接失敗
+```bash
+# 檢查 OpenD 是否正常啟動
+docker compose -f docker-compose.vps.yml logs futuopend
+
+# 檢查 healthcheck
+docker inspect futuopend | grep -A5 Health
+```
+
+### Backend 連唔到 OpenD
+```bash
+# 確認在同一個網絡
+docker network inspect position-calculator_vcp-network
+
+# 測試連接
+docker exec -it vcp-backend ping futuopend
+docker exec -it vcp-backend nc -zv futuopend 11111
+```
+
+### SSL 證書過期
+```bash
+certbot renew
+systemctl reload nginx
+```
+
+---
+
+## 本地版本（保持不變）
+
+```bash
+# 本地運行（繼續用你本地電腦嘅 OpenD）
+cd position-calculator
+docker compose up -d
+
+# 訪問 http://localhost:3000
+```
+
+---
+
+## 資源需求
+
+| 組件 | RAM | CPU |
+|------|-----|-----|
+| OpenD CLI | ~200MB | 1 core |
+| Backend | ~300MB | 1 core |
+| Frontend | ~400MB | 1 core |
+| Nginx | ~50MB | 1 core |
+| **Total** | **~1GB** | 2 cores |
+
+建議 VPS 配置：
+- 最低：1 CPU / 1GB RAM（可能會 swap）
+- 推薦：2 CPU / 2GB RAM（流暢運行）

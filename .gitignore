@@ -25,6 +25,18 @@ yarn-error.log*
 # local env files
 .env*.local
 .env
+.env.vps
+.env.vps.example
+
+# VPS sensitive files
+/opt/vcp-calculator/
+/opt/futuopend/
+
+# RSA keys
+*.pem
+docker/keys/
+docker/*.pem
+!docker/*.example
 
 # futu openD config (local)
 futu_data/
