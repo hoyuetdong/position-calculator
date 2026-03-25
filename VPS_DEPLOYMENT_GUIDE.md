@@ -481,12 +481,28 @@ curl http://localhost:8000/positions
 
 ---
 
-## 本地版本（保持不變）
+## 本地版本（macOS / Linux）
+
+### 快速啟動（推薦）
 
 ```bash
-# 本地運行（繼續用你本地電腦嘅 OpenD）
-cd position-calculator
-docker compose up -d
-
-# 訪問 http://localhost:3000
+./start.sh
 ```
+
+### 手動啟動
+
+1. **設置 Python 環境（只需做一次）：**
+```bash
+pip3 install -r requirements.txt
+```
+
+2. **啟動服務：**
+```bash
+source venv/bin/activate
+python backend/main.py &   # 啟動後端
+npm run dev               # 啟動前端
+```
+
+訪問 http://localhost:3000
+
+> 注意：本地版本使用 `127.0.0.1` 連接富途 OpenD，確保 OpenD 已運行。

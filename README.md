@@ -25,20 +25,41 @@ docker-compose up -d
 
 需要同時運行前端和後端。
 
-**Terminal 1 - 前端 + 後端：**
+**快速啟動（推薦）：**
 ```bash
-cd position-calculator
-npm run dev & python3 backend/main.py
+./start.sh
+```
+
+**手動啟動：**
+
+1. **設置 Python 環境（只需做一次）：**
+```bash
+# 安裝依賴
+pip3 install -r requirements.txt
+```
+
+2. **啟動服務：**
+```bash
+# 方式 A: 一鍵啟動
+./start.sh
+
+# 方式 B: 手動分開啟動
+source venv/bin/activate  # 啟用 Python 虛擬環境
+python backend/main.py &   # 啟動後端
+npm run dev               # 啟動前端
 ```
 
 訪問 `http://localhost:3000`
+
+按 `Ctrl+C` 停止所有服務。
 
 ### 運行方式對比
 
 | 方式 | 前端 (Port 3000) | 後端 (Port 8000) | 富途 OpenD 連接 |
 |------|-----------------|-----------------|----------------|
 | Docker | ✅ | ✅ | host.docker.internal |
-| 本地 | ✅ (同一 Terminal) | ✅ | 127.0.0.1 |
+| 本地 (start.sh) | ✅ | ✅ | 127.0.0.1 |
+| 本地 (手動) | ✅ | ✅ | 127.0.0.1 |
 
 兩種方式都可以同時連接富途拎 data。
 
@@ -86,7 +107,13 @@ docker-compose down    # 停止並刪除 container
 
 ### 本地開發
 
-喺 Terminal 按 `Ctrl + C` 停止（會同時停止前端和後端）。
+使用 `start.sh` 啟動的話，按 `Ctrl+C` 會停止所有服務。
+
+或者手動停止：
+```bash
+pkill -f "python backend/main.py"  # 停止後端
+pkill -f "next dev"                 # 停止前端
+```
 
 ## 更新
 
