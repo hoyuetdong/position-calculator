@@ -103,48 +103,20 @@ _disable_futu_logging()
 
 
 # ============================================================================
-# 智能檢測運行環境並選擇正確的 OpenD 主機地址
+# 獲取 OpenD 主機地址
 # ============================================================================
 def _get_futu_host() -> str:
     """
-    智能檢測運行環境並返回正確的 OpenD 主機地址。
+    返回 OpenD 主機地址。
     
     優先級：
     1. 如果環境變數 FUTU_HOST 已設置，直接使用
-    2. 如果喺 Docker 容器內運行（檢測 /proc/self/cgroup 或環境變數），使用 host.docker.internal
-    3. 否則使用 127.0.0.1（本地運行）
+    2. 否則使用 127.0.0.1（本地運行）
     """
-    # 優先使用環境變數
     env_host = os.getenv("FUTU_HOST")
     if env_host:
         return env_host
-    
-    # 檢測是否喺 Docker 容器內運行
-    is_docker = False
-    
-    # 方法1: 檢查環境變數（Docker Compose 可能會設置）
-    if os.getenv("DOCKER_CONTAINER") == "true":
-        is_docker = True
-    
-    # 方法2: 檢查 cgroup（Linux/Mac Docker）
-    try:
-        if os.path.exists("/proc/self/cgroup"):
-            with open("/proc/self/cgroup", "r") as f:
-                content = f.read()
-                if "docker" in content or "containerd" in content:
-                    is_docker = True
-    except:
-        pass
-    
-    # 方法3: 檢查 /.dockerenv 文件（Docker 容器標記）
-    if os.path.exists("/.dockerenv"):
-        is_docker = True
-    
-    # 根據運行環境返回對應主機地址
-    if is_docker:
-        return "host.docker.internal"
-    else:
-        return "127.0.0.1"
+    return "127.0.0.1"
 
 
 # ============================================================================
@@ -1080,7 +1052,7 @@ def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
     return all_positions
 
 
-@app.get("/health")
+@app.get("/api/health")
 def health_check():
     """Health check endpoint."""
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
@@ -1099,7 +1071,7 @@ class SetEnvRequest(BaseModel):
     trade_env: str
 
 
-@app.get("/env", response_model=EnvResponse)
+@app.get("/api/env", response_model=EnvResponse)
 def get_env():
     """取得當前交易環境."""
     return EnvResponse(
@@ -1109,7 +1081,7 @@ def get_env():
     )
 
 
-@app.post("/env", response_model=EnvResponse)
+@app.post("/api/env", response_model=EnvResponse)
 def set_env(request: SetEnvRequest):
     """設定當前交易環境 (SIMULATE 或 REAL)."""
     try:
@@ -1123,7 +1095,7 @@ def set_env(request: SetEnvRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/positions", response_model=SyncResponse)
+@app.get("/api/positions", response_model=SyncResponse)
 def get_positions():
     """
     Get all stock/ETF positions from Futu/Moomoo.
@@ -1164,7 +1136,7 @@ def get_positions():
         )
 
 
-@app.get("/balance", response_model=BalanceResponse)
+@app.get("/api/balance", response_model=BalanceResponse)
 def get_account_balance():
     """
     Get account balance in USD from Futu/Moomoo US account.
@@ -1200,7 +1172,7 @@ def get_account_balance():
         )
 
 
-@app.post("/order", response_model=OrderResponse)
+@app.post("/api/order", response_model=OrderResponse)
 def place_order(order: OrderRequest):
     """
     Place a buy/sell order via Futu OpenD.
@@ -1264,7 +1236,7 @@ def place_order(order: OrderRequest):
         )
 
 
-@app.get("/pending-stops", response_model=PendingStopOrdersResponse)
+@app.get("/api/pending-stops", response_model=PendingStopOrdersResponse)
 def get_pending_stop_orders():
     """
     取得所有有待觸發止蝕單狀態.
@@ -1333,7 +1305,7 @@ class KLineResponse(BaseModel):
     timestamp: str
 
 
-@app.get("/quote/{codes}", response_model=QuoteResponse)
+@app.get("/api/quote/{codes}", response_model=QuoteResponse)
 def get_stock_quote(codes: str):
     """
     查詢股票報價 (使用行情接口，不需要加密).
@@ -1567,7 +1539,7 @@ def _calculate_atr(highs: list, lows: list, closes: list, period: int) -> Option
     return sum(tr_values[-period:]) / period
 
 
-@app.get("/kline/{code}", response_model=KLineResponse)
+@app.get("/api/kline/{code}", response_model=KLineResponse)
 def get_stock_kline(
     code: str,
     days: int = 365,

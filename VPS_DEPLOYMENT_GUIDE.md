@@ -1,33 +1,22 @@
 # =============================================================================
-# VPS 部署完整指南
-# Position Calculator (OpenD 獨立安裝)
+# Position Calculator 部署指南
+# 直接在主機運行（唔使用 Docker）
 # =============================================================================
 
 ## 架構説明
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                        VPS Server                        │
+│                        主機 Server                        │
 │                                                          │
-│  ┌──────────┐    ┌──────────────┐                       │
-│  │ OpenD    │◄───│   Backend    │  Docker Network       │
-│  │ (主機)   │    │   :8000      │                       │
-│  │ :11111   │    └──────┬───────┘                       │
-│  └──────────┘           │                               │
-│                          │                               │
-│         ┌────────────────▼───┐                         │
-│         │     Nginx           │                         │
-│         │  + SSL + 密碼認證    │  ◄── 用戶瀏覽器 (HTTPS) │
-│         │     :443            │                         │
-│         └─────────────────────┘                         │
-│                                                          │
+│  ┌──────────┐    ┌──────────────┐    ┌─────────────┐  │
+│  │ OpenD    │◄───│   Backend    │◄───│   Frontend  │  │
+│  │ :11111   │    │   :8000      │    │   :3000     │  │
+│  └──────────┘    └──────────────┘    └──────┬──────┘  │
+│                                              │          │
+│                          ◄── 用戶瀏覽器 (HTTP/HTTPS)   │
 └─────────────────────────────────────────────────────────┘
 ```
-
-**特點：** OpenD 跑喺主機，唔喺 Docker。入面咁做係因為：
-- 唔需要配置 RSA 加密（localhost 交易接口允許唔加密）
-- 方便直接睇日誌、調試
--唔需要重複 SMS 驗證
 
 ---
 
@@ -35,23 +24,47 @@
 
 ```
 position-calculator/
-├── docker-compose.yml          # 本地版本（唔改）
-├── docker-compose.vps.yml      # VPS 版本
-├── .env.example                # 環境變量模板
-├── backend/
-│   └── Dockerfile              # Backend Docker 鏡像
-├── docker/
-│   └── nginx.conf.example       # Nginx 配置模板
-└── Dockerfile                  # Frontend Docker 鏡像
+├── .env                      # 環境變量（包含敏感信息）
+├── .env.example              # 環境變量模板
+├── README.md                  # 項目説明
+├── requirements.txt           # Python 依賴
+├── package.json               # Node.js 依賴
+├── start.sh                   # 啟動腳本（本地用）
+├── start-vps.sh               # VPS 啟動腳本
+├── stop-vps.sh                # VPS 停止腳本
+├── src/                       # Next.js 前端源碼
+└── backend/                   # Python FastAPI 後端
+    └── main.py                # 後端主程序
 ```
 
 > **注意**：OpenD 係獨立安裝官方版，唔喺呢個 repo 入面。請去 [富途官網](https://openapi.futunn.com/futu-api-doc/en/opend/opend-install.html) 下載。
 
 ---
 
+## 環境變量 (.env)
+
+```bash
+# 富途 OpenD 配置
+FUTU_HOST=127.0.0.1                    # OpenD 主機 IP (本地: 127.0.0.1, VPS remote: 170.106.62.115)
+FUTU_PORT=11111                        # OpenD 端口
+FUTU_LOGIN_ACCOUNT=7202895              # 富途帳號
+FUTU_LOGIN_PWD_MD5=eeef0f684aa5e2e5c1d1a51b4bf5643b  # 登入密碼 MD5
+FUTU_TRADE_PWD=442398                  # 交易密碼（解鎖交易功能）
+
+# 後端配置
+PORT=8000
+FUTU_DISABLE_LOG=1                      # 禁用日誌寫入（避免權限問題）
+
+# 前端配置
+PYTHON_API_URL=http://localhost:8000    # 後端 API 地址
+APP_PASSWORD=Yy442398!!                 # 訪問 App 密碼
+```
+
+---
+
 ## 部署流程（VPS）
 
-### Step 1: 基礎安全設定
+### Step 1: 基礎設定
 
 ```bash
 # 登入 VPS
@@ -59,23 +72,14 @@ ssh root@your-vps-ip
 
 # 安裝必要軟件
 apt update && apt upgrade -y
-apt install -y docker.io docker-compose nginx certbot python3-certbot-nginx apache2-utils ufw
+apt install -y python3 python3-pip python3-venv nginx certbot python3-certbot-nginx
 
-# 設定 UFW Firewall（只開放必要 port）
-ufw default deny incoming    # 預設拒絕所有入站
-ufw allow 22/tcp             # SSH（你自己用）
-ufw allow 443/tcp            # HTTPS
+# 設定 Firewall
+ufw default deny incoming
+ufw allow 22/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
 ufw enable
-
-# SSH 強化：禁用密碼登入，改用 Key（如果未設定）
-nano /etc/ssh/sshd_config
-# 確保以下設定：
-#   PasswordAuthentication no
-#   PubkeyAuthentication yes
-systemctl restart sshd
-
-# 創建應用目錄
-mkdir -p /opt/vcp-calculator
 ```
 
 ### Step 2: 安裝 FutuOpenD Linux CLI
@@ -83,426 +87,253 @@ mkdir -p /opt/vcp-calculator
 OpenD 跑喺主機，唔喺 Docker 入面。
 
 ```bash
-cd /opt/vcp-calculator
+cd /opt
 
 # 下載 FutuOpenD Linux CLI
 # 去呢度下載：https://openapi.futunn.com/futu-api-doc/en/opend/opend-install.html
 # 選擇 "Linux CLI" 版本
 
-# 方法 A: 如果有 direct download link
-wget https://example.com/FutuOpenD_Linux_CLI.tar.gz  # 替換為實際連結
-
-# 方法 B: 從本地 scp 過來
-# scp /path/to/FutuOpenD_Linux_CLI.tar.gz root@your-vps-ip:/opt/vcp-calculator/
-
-# 解壓到 /opt/futuopend
-mkdir -p /opt/futuopend
+# 解壓
 tar -xzf FutuOpenD_Linux_CLI.tar.gz
-mv FutuOpenD_Linux_CLI/* /opt/futuopend/
-rm -rf FutuOpenD_Linux_CLI
-
-# 確認
-ls /opt/futuopend/
+mv FutuOpenD /opt/futuopend
 ```
 
-### Step 3: Clone 項目到 VPS
+### Step 3: 配置並啟動 OpenD
 
 ```bash
-cd /opt/vcp-calculator
+# 創建 OpenD 配置目錄
+mkdir -p /opt/futuopend/data
 
-# Clone 項目
-git clone https://github.com/hoyuetdong/position-calculator.git .
-
-# 切換到最新版本
-git pull
+# 複製並編輯配置
+cp /opt/futuopend/config/FutuOpenD_linux.json /opt/futuopend/data/
+nano /opt/futuopend/data/FutuOpenD_linux.json
 ```
 
-### Step 4: 配置環境變量
+**FutuOpenD_linux.json 關鍵配置：**
 
-```bash
-cd /opt/vcp-calculator
-
-# 複製環境變量模板
-cp .env.example .env
-
-# 編輯配置
-nano .env
-```
-
-填入以下內容：
-```env
-FUTU_TRADE_PWD=你的富途交易密碼
-APP_PASSWORD=你的訪問密碼（防黑客）
-```
-
-### Step 5: 配置並啟動 OpenD
-
-下載並安裝完成後，啟動 OpenD：
-```bash
-cd /opt/futuopend
-./futuopend
-```
-
-#### 首次配置
-
-OpenD 啟動後會引導你進行首次配置：
-
-1. **登入方式**：選擇「帳號密碼登入」（唔需要 RSA）
-2. **填入富途 App ID / Secret Key**：喺富途後台申請
-3. **API Listening Address**：**必須設為 `0.0.0.0`**
-   - ⚠️ **唔可以設為 `127.0.0.1`**，因為 Docker container 係用 `172.17.0.1` 連接主機，唔係 `127.0.0.1`
-4. **API Port**：保持 `11111`
-5. **交易密碼**：設定你嘅富途交易密碼
-
-#### 首次登入（SMS 驗證）
-
-如果係首次登入，OpenD 會輸出類似：
-```
-[INFO] Please visit: https://nnn.futunn.com/xxx/verify?code=xxxxx
-```
-
-1. 複製呢個連結
-2. 喺你本地瀏覽器打開
-3. 完成 SMS 驗證
-4. OpenD 會自動連接成功
-
-成功後會見到：
-```
-[INFO] Connect to Futu OpenD success
-```
-
-**之後改為 background 運行：**
-```bash
-# 停止前景進程 (Ctrl+C)
-# 改用 systemd 服務或 nohup 後台運行
-
-# 方法 A: nohup
-nohup ./futuopend > opend.log 2>&1 &
-
-# 方法 B: systemd service (推薦)
-cat > /etc/systemd/system/futuopend.service << 'EOF'
-[Unit]
-Description=Futu OpenD
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/futuopend
-ExecStart=/opt/futuopend/futuopend
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable futuopend
-systemctl start futuopend
-
-# 確認狀態
-systemctl status futuopend
-```
-
-### Step 6: 啟動 Docker 服務（Backend + Frontend）
-
-```bash
-cd /opt/vcp-calculator
-
-# 啟動服務
-docker compose -f docker-compose.vps.yml up -d
-
-# 確認所有服務運行正常
-docker compose -f docker-compose.vps.yml ps
-```
-
-你應該會見到：
-```
-NAME           STATUS
-vcp-backend    Up
-vcp-calculator Up
-```
-
-### Step 7: 配置 Nginx + SSL
-
-```bash
-cd /opt/vcp-calculator
-
-# 複製 Nginx 配置
-cp docker/nginx.conf.example /etc/nginx/sites-available/vcp-calculator
-nano /etc/nginx/sites-available/vcp-calculator
-# 將 your-domain.com 改為你的域名
-
-# 啟用站點
-ln -sf /etc/nginx/sites-available/vcp-calculator /etc/nginx/sites-enabled/vcp-calculator
-rm -f /etc/nginx/sites-enabled/default
-
-# 測試配置
-nginx -t
-
-# 重新載入
-systemctl reload nginx
-```
-
-### Step 8: 申請 SSL 證書
-
-```bash
-# 確認 DNS 已解析到 VPS IP
-# A record: your-domain.com -> VPS_IP
-
-# 申請 Let's Encrypt 免費 SSL
-certbot --nginx -d your-domain.com
-
-# 自動續期測試
-certbot renew --dry-run
-```
-
-### Step 9: 創建密碼認證
-
-```bash
-# 創建密碼檔
-htpasswd -c /etc/nginx/.htpasswd admin
-
-# 之後添加其他用戶
-htpasswd /etc/nginx/.htpasswd another_user
-```
-
-確認 Nginx 配置已啟用密碼認證：
-
-```nginx
-server {
-    # ... 其他配置 ...
-
-    auth_basic "VCP Position Calculator - Login Required";
-    auth_basic_user_file /etc/nginx/.htpasswd;
-
-    # ... 其他配置 ...
+```json
+{
+    "ip": "0.0.0.0",
+    "port": 11111,
+    "enable_crypto": false,
+    "enable_market_snapshot_push": true
 }
 ```
 
-如果冇呢兩行，就算 set 好密碼檔都唔會彈登入框。
+**啟動 OpenD：**
 
 ```bash
-# 確認後重新載入
-systemctl reload nginx
+# 使用 screen 運行 OpenD
+screen -S opend
+cd /opt/futuopend
+./FutuOpenD
+# 按 Ctrl+A D 退出 screen
 ```
 
----
-
-## 安全檢查清單
-
-### 網絡安全
-- [x] UFW Firewall 只開放 22 (SSH) + 443 (HTTPS)
-- [x] SSH 禁用密碼登入，改用 Key
-- [x] OpenD 只監聽本地（唔暴露俾公網）
-- [x] Backend/Frontend 只監聽 127.0.0.1
-- [x] Nginx 配置 Basic Auth
-- [x] 使用 HTTPS (Let's Encrypt)
-
-### ⚠️ Docker 與 UFW 衝突警告
-
-Docker 預設會直接修改 iptables，**繞過 UFW** 暴露端口！
-
-喺 `docker-compose.vps.yml` 入面，所有暴露俾 Nginx 嘅 port mapping **必須寫死 127.0.0.1**：
-
-```yaml
-services:
-  backend:
-    ports:
-      - "127.0.0.1:8000:8000"  # ✅ 正確，街外人直擊 IP 都入唔到
-      # - "8000:8000"          # ❌ 危險，Docker 會穿透 UFW 暴露出去
-```
-
-### Nginx 安全強化（可選但推薦）
-
-喺 `/etc/nginx/sites-available/vcp-calculator` 加入以下 header：
-
-```nginx
-add_header X-Frame-Options "SAMEORIGIN" always;
-add_header X-Content-Type-Options "nosniff" always;
-add_header X-XSS-Protection "1; mode=block" always;
-add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-autoindex off;
-```
+### Step 4: 從 Git 拉取項目
 
 ```bash
-systemctl reload nginx
+# SSH 進入 VPS
+ssh root@107.173.153.41
+
+# Clone 或 Pull 項目（首次需要）
+cd /opt
+git clone https://github.com/你的username/position-calculator.git vcp-calculator
+# 或如果已存在：
+# cd /opt/vcp-calculator && git pull
 ```
 
----
+### Step 5: 配置並啟動服務（懶人方式）
 
-## 日常維護
-
-### 睇日誌
-
-```bash
-# OpenD 日誌（主機）
-journalctl -u futuopend -f
-# 或者
-tail -f /opt/futuopend/opend.log
-
-# Docker 服務日誌
-docker compose -f docker-compose.vps.yml logs -f
-
-# 指定服務
-docker compose -f docker-compose.vps.yml logs -f backend
-docker compose -f docker-compose.vps.yml logs -f vcp-calculator
-```
-
-### 更新代碼
+**全部用一個命令搞掂！**
 
 ```bash
 cd /opt/vcp-calculator
-git pull
-docker compose -f docker-compose.vps.yml up --build -d
+
+# 1. 確保 .env 設定正確
+nano .env
+# 確認 FUTU_HOST=170.106.62.115（remote OpenD）
+
+# 2. 一鍵啟動！（自動安裝依賴、殺舊進程、啟動服務）
+./start-vps.sh
 ```
 
-### 重啟服務
+**停止服務：**
 
 ```bash
-# 重啟 OpenD
-systemctl restart futuopend
-
-# 重啟 Docker 服務
-docker compose -f docker-compose.vps.yml restart
+./stop-vps.sh
 ```
 
-### 停止服務
+**常用命令：**
 
 ```bash
-# Docker 服務
-docker compose -f docker-compose.vps.yml down
+# 查看後端日誌
+tail -f /tmp/position-calculator-backend.log
 
-# OpenD
-systemctl stop futuopend
+# 查看前端日誌
+tail -f /tmp/position-calculator-frontend.log
+
+# 測試後端健康狀態
+curl http://localhost:8000/api/health
+
+# 測試持倉 API
+curl http://localhost:8000/api/positions
 ```
 
----
+> **注意**：OpenD 必須先運行！如果 OpenD 未運行，`start-vps.sh` 會顯示後端啟動失敗。
 
-## 故障排除
-
-### Backend 連唔到 OpenD
+### Step 7: Nginx 反向代理（可選）
 
 ```bash
-# 確認 OpenD 正常運行
-systemctl status futuopend
-
-# 測試 OpenD port
-nc -zv 127.0.0.1 11111
-
-# 確認 Docker 能夠連接主機
-docker exec -it vcp-backend nc -zv 172.17.0.1 11111
+# 創建 Nginx 配置
+nano /etc/nginx/sites-available/position-calculator
 ```
 
-如果連接有問題，檢查 OpenD 配置入面 `API Listening Address` **係咪 `0.0.0.0`**。
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;  # 或 IP
 
-### Docker network 問題
-
-```bash
-# 確認 Docker network 存在
-docker network inspect position-calculator_vcp-network
-
-# 確認 backend 網絡設定
-docker inspect vcp-backend | grep Networks -A5
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
 ```
 
-### SSL 證書過期
-
 ```bash
-certbot renew
+# 啟用配置
+ln -s /etc/nginx/sites-available/position-calculator /etc/nginx/sites-enabled/
+nginx -t
 systemctl reload nginx
+
+# SSL（可選）
+certbot --nginx -d your-domain.com
 ```
-
-### 富途 API 連接失敗 / 日誌權限問題
-
-如果你遇到以下錯誤：
-```
-[Errno 1] Operation not permitted: '/Users/xxx/.com.futunn.FutuOpenD/Log/py_2026_03_25.log'
-```
-
-**原因**：`futu-api` 嘗試寫入日誌檔案但被權限阻止。
-
-**解決方法**（任選其一）：
-
-1. **設置環境變數（推薦）**
-   ```bash
-   # 喺 .env 或啟動命令入面加：
-   FUTU_DISABLE_LOG=1
-   ```
-
-2. **手動創建日誌目錄**
-   ```bash
-   mkdir -p ~/.com.futunn.FutuOpenD/Log
-   chmod 755 ~/.com.futunn.FutuOpenD
-   chmod 755 ~/.com.futunn.FutuOpenD/Log
-   ```
-
-3. **VPS / Docker 部署**
-   - 確保 `docker-compose.vps.yml` 入面有 `FUTU_DISABLE_LOG=1`
-   - 或者確保主機上有 `/root/.com.futunn.FutuOpenD/Log` 目錄
-
-**驗證修復**：
-```bash
-curl http://localhost:8000/positions
-# 應該返回 JSON，唔再係 error
 
 ---
 
-## 資源需求
-
-| 組件 | RAM | CPU |
-|------|-----|-----|
-| OpenD CLI (主機) | ~200MB | 1 core |
-| Backend (Docker) | ~300MB | 1 core |
-| Frontend (Docker) | ~400MB | 1 core |
-| Nginx | ~50MB | 1 core |
-| **Total** | **~1GB** | 2 cores |
-
-建議 VPS 配置：
-- 最低：1 CPU / 1GB RAM（可能會 swap）
-- 推薦：2 CPU / 2GB RAM（流暢運行）
-
----
-
-## ⚠️ 安全提醒
-
-### 一定要做（防被hack）
-1. **UFW Firewall** - 只開 22 + 443 port
-2. **SSH Key 登入** - 禁用密碼login
-3. **強密碼** - APP_PASSWORD 起碼 16 位
-
-### 敏感資訊（唔好 commit）
-
-確保以下檔案 **唔會** commit 到 GitHub：
-- `.env` - 包含交易密碼
-
-檢查你的 `.gitignore` 包含晒呢啲。
-
----
-
-## 本地版本（macOS / Linux）
-
-### 快速啟動（推薦）
+## 本地運行
 
 ```bash
-./start.sh
-```
+cd position-calculator
 
-### 手動啟動
-
-1. **設置 Python 環境（只需做一次）：**
-```bash
-pip3 install -r requirements.txt
-```
-
-2. **啟動服務：**
-```bash
+# 安裝依賴
+npm install
+python3 -m venv venv
 source venv/bin/activate
-python backend/main.py &   # 啟動後端
-npm run dev               # 啟動前端
+pip install -r requirements.txt
+
+# 啟動（需要 OpenD 運行）
+./start.sh
+# 或手動：
+# source venv/bin/activate
+# python backend/main.py &
+# npm run dev
 ```
 
-訪問 http://localhost:3000
+---
 
-> 注意：本地版本使用 `127.0.0.1` 連接富途 OpenD，確保 OpenD 已運行。
+## 常見問題排查
+
+| 問題 | 原因 | 解決方法 |
+|------|------|----------|
+| `ECONNREFUSED` | 後端未運行 | 檢查進程：`ps aux \| grep main.py` |
+| `Not Found` | API 路徑缺少 `/api` | 檢查 `src/app/api/*/route.ts` |
+| 右上角紅燈 | 富途連接失敗 | 見下方 OpenD 排查 |
+| 富途持倉同步失敗 | OpenD 未登入 | 確認 OpenD 已啟動並登入 |
+
+### OpenD 排查
+
+```bash
+# 1. 確認 OpenD 進程運行中
+ps aux | grep FutuOpenD | grep -v grep
+
+# 2. 確認端口監聽
+netstat -tlnp | grep 11111
+
+# 3. 測試 OpenD 連接
+telnet 170.106.62.115 11111
+
+# 4. 進入 OpenD screen 查看日誌
+screen -r opend
+# 按 Ctrl+A D 退出
+
+# 5. 如果 OpenD 未運行，重新啟動
+screen -S opend
+cd /opt/futuopend
+./FutuOpenD
+# 按 Ctrl+A D 退出
+```
+
+### 驗證命令
+
+```bash
+# 測試後端 API
+curl http://localhost:8000/api/positions
+
+# 測試前端
+curl http://localhost:3000
+
+# 檢查進程
+ps aux | grep -E '(next|main.py)' | grep -v grep
+
+# 檢查 screen
+screen -ls
+
+# 查看日誌
+tail -f /tmp/position-calculator-backend.log
+tail -f /tmp/position-calculator-frontend.log
+```
+
+---
+
+## VPS 信息
+
+```
+VPS IP: 107.173.153.41
+OpenD Remote: 170.106.62.115:11111
+Frontend: 3000
+Backend: 8000
+
+代碼路徑: /opt/vcp-calculator
+
+Screen Sessions:
+- opend: 富途 OpenD（必須運行）
+
+日誌路徑:
+- /tmp/position-calculator-backend.log
+- /tmp/position-calculator-frontend.log
+```
+
+## 部署命令速查
+
+```bash
+# SSH 進入 VPS
+ssh root@107.173.153.41
+
+# === 一鍵啟動（推薦）===
+cd /opt/vcp-calculator
+./start-vps.sh
+
+# === 一鍵停止 ===
+cd /opt/vcp-calculator
+./stop-vps.sh
+
+# === OpenD 管理 ===
+# 確認 OpenD 運行
+ps aux | grep FutuOpenD | grep -v grep
+
+# 啟動 OpenD（如需）
+screen -S opend
+cd /opt/futuopend && ./FutuOpenD
+# Ctrl+A D 退出
+
+# 查看 OpenD 終端
+screen -r opend
+# Ctrl+A D 退出
+```

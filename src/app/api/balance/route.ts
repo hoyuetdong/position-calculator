@@ -4,7 +4,7 @@ import { fetchWithTimeout } from '@/lib/fetchWithTimeout'
 export async function GET() {
   try {
     const backendUrl = process.env.PYTHON_API_URL || 'http://localhost:8000'
-    const response = await fetchWithTimeout(`${backendUrl}/balance`)
+    const response = await fetchWithTimeout(`${backendUrl}/api/balance`)
 
     if (!response.ok) {
       const error = await response.json()

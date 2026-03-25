@@ -10,63 +10,34 @@
 - 支援港股、美股、A股
 - 富途持倉同步（可選）
 
-## 運行
+## 快速啟動
 
-### 方式一：Docker 部署（推薦）
-
-一次過運行前端 + 後端，自動連接本地 FutuOpenD。
-
-```bash
-cd position-calculator
-docker-compose up -d
-```
-
-### 方式二：本地開發
-
-需要同時運行前端和後端。
-
-**快速啟動（推薦）：**
 ```bash
 ./start.sh
-```
-
-**手動啟動：**
-
-1. **設置 Python 環境（只需做一次）：**
-```bash
-# 安裝依賴
-pip3 install -r requirements.txt
-```
-
-2. **啟動服務：**
-```bash
-# 方式 A: 一鍵啟動
-./start.sh
-
-# 方式 B: 手動分開啟動
-source venv/bin/activate  # 啟用 Python 虛擬環境
-python backend/main.py &   # 啟動後端
-npm run dev               # 啟動前端
 ```
 
 訪問 `http://localhost:3000`
 
 按 `Ctrl+C` 停止所有服務。
 
-### 運行方式對比
+## 本地開發
 
-| 方式 | 前端 (Port 3000) | 後端 (Port 8000) | 富途 OpenD 連接 |
-|------|-----------------|-----------------|----------------|
-| Docker | ✅ | ✅ | host.docker.internal |
-| 本地 (start.sh) | ✅ | ✅ | 127.0.0.1 |
-| 本地 (手動) | ✅ | ✅ | 127.0.0.1 |
-
-兩種方式都可以同時連接富途拎 data。
-
-## 配置
+### 1. 安裝依賴（只需做一次）
 
 ```bash
-cp .env.example .env  # 如果冇 .env 檔
+# Node.js 依賴
+npm install
+
+# Python 依賴
+python3 -m venv venv
+source venv/bin/activate  # macOS/Linux
+pip install -r requirements.txt
+```
+
+### 2. 配置
+
+```bash
+cp .env.example .env
 ```
 
 編輯 `.env`：
@@ -76,20 +47,28 @@ cp .env.example .env  # 如果冇 .env 檔
 FUTU_LOGIN_ACCOUNT=你的牛牛ID
 FUTU_LOGIN_PWD_MD5=密碼MD5
 
-# OpenD 連接（留空則自動檢測：Docker 用 host.docker.internal，本地用 127.0.0.1）
-FUTU_HOST=
+# OpenD 連接
+FUTU_HOST=127.0.0.1
 FUTU_PORT=11111
-FUTU_WS_PORT=8081
 
 # 交易密碼（富途功能需要）
 FUTU_TRADE_PWD=你的交易密碼
+
+# 禁用日誌（避免權限問題）
+FUTU_DISABLE_LOG=1
 ```
 
-> 提示：FUTU_HOST 留空即可，系統會自動檢測運行環境選擇正確嘅連接方式。
+### 3. 手動啟動
+
+```bash
+source venv/bin/activate
+python backend/main.py &   # 啟動後端
+npm run dev               # 啟動前端
+```
 
 ## 富途功能（可選）
 
-**需要本地安裝 FutuOpenD**，docker-compose 會透過 `host.docker.internal` 連接本機既 OpenD。
+**需要本地安裝 FutuOpenD**：
 
 1. [下載並安裝 FutuOpenD](https://www.futuhk.com/support/courseDetail/1140)
 2. 啟動 OpenD 並登入
@@ -98,18 +77,6 @@ FUTU_TRADE_PWD=你的交易密碼
 
 ## 停止
 
-### Docker 部署
-
-```bash
-docker-compose stop    # 停止（唔刪除 container）
-docker-compose down    # 停止並刪除 container
-```
-
-### 本地開發
-
-使用 `start.sh` 啟動的話，按 `Ctrl+C` 會停止所有服務。
-
-或者手動停止：
 ```bash
 pkill -f "python backend/main.py"  # 停止後端
 pkill -f "next dev"                 # 停止前端
@@ -117,10 +84,11 @@ pkill -f "next dev"                 # 停止前端
 
 ## 更新
 
-更新專案代碼後，需重新 build：
-
 ```bash
-docker-compose up --build -d
+git pull
+npm install
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ---
@@ -156,4 +124,8 @@ chmod 755 ~/.com.futunn.FutuOpenD
 chmod 755 ~/.com.futunn.FutuOpenD/Log
 ```
 
-詳細說明請睇 [VPS_DEPLOYMENT_GUIDE.md](VPS_DEPLOYMENT_GUIDE.md)
+---
+
+## VPS 部署
+
+詳細部署指南請睇 [VPS_DEPLOYMENT_GUIDE.md](VPS_DEPLOYMENT_GUIDE.md)

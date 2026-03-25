@@ -4,7 +4,7 @@ import { fetchWithTimeout } from '@/lib/fetchWithTimeout'
 export async function GET() {
   try {
     const backendUrl = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
-    const response = await fetchWithTimeout(`${backendUrl}/env`)
+    const response = await fetchWithTimeout(`${backendUrl}/api/env`)
 
     if (!response.ok) {
       const error = await response.json()
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
 
     const backendUrl = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
-    const response = await fetchWithTimeout(`${backendUrl}/env`, {
+    const response = await fetchWithTimeout(`${backendUrl}/api/env`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

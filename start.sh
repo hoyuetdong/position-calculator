@@ -18,7 +18,7 @@ cd "$SCRIPT_DIR"
 
 # 啟動前端 (背景)
 echo "啟動前端服務..."
-npm run dev &
+HOST=0.0.0.0 npm run dev &
 FRONTEND_PID=$!
 
 echo ""

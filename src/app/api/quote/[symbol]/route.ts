@@ -47,7 +47,7 @@ export async function GET(
       console.log(`[Quote API] Backend URL: ${backendUrl}`)
 
       try {
-        const futuResponse = await fetch(`${backendUrl}/quote/${futuCode}`, {
+        const futuResponse = await fetch(`${backendUrl}/api/quote/${futuCode}`, {
           signal: AbortSignal.timeout(15000),  // 增加 timeout，因為要拎 K 線數據
         })
 

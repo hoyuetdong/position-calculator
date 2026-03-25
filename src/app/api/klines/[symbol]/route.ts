@@ -43,7 +43,7 @@ export async function GET(
       console.log(`[KLines API] Fetching futu klines for: ${futuCode}`)
 
       const futuResponse = await fetch(
-        `${backendUrl}/kline/${futuCode}?days=${days}&ktype=DAY`,
+        `${backendUrl}/api/kline/${futuCode}?days=${days}&ktype=DAY`,
         { signal: AbortSignal.timeout(15000) }
       )
 

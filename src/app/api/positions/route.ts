@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
-    const response = await fetchWithTimeout(`${PYTHON_API_URL}/positions`, {
+    const response = await fetchWithTimeout(`${PYTHON_API_URL}/api/positions`, {
       headers: {
         'Content-Type': 'application/json',
       },
