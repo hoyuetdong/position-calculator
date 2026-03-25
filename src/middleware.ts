@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const password = process.env.APP_PASSWORD
 
   // 如果冇設定密碼，直接放行
@@ -18,7 +18,7 @@ export function middleware(request: NextRequest) {
 
   // 檢查 header (POST 登入表單)
   if (request.method === 'POST') {
-    const formData = request.formData()
+    const formData = await request.formData()
     const submittedPassword = formData.get('password')
 
     if (submittedPassword === password) {
