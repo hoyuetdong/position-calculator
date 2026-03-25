@@ -25,9 +25,10 @@ export async function middleware(request: NextRequest) {
       const response = NextResponse.redirect(new URL('/', request.url))
       response.cookies.set('auth_password', password, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: false, // VPS 用 HTTP
         maxAge: 60 * 60 * 24 * 7, // 7 days
         path: '/',
+        sameSite: 'lax',
       })
       return response
     }
