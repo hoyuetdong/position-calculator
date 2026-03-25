@@ -1,46 +1,20 @@
 # =============================================================================
-# VPS 部署版本 - Position Calculator + OpenD
+# VPS 部署版本 - Position Calculator
 # =============================================================================
+# OpenD 獨立安裝喺主機（唔喺 Docker 入面）
+# 詳情睇: https://openapi.futunn.com/futu-api-doc/en/opend/opend-install.html
+#
+# 確認 OpenD 設定：
+#   - API Listening Address: 0.0.0.0（必須！唔可以係 127.0.0.1）
+#   - API Port: 11111
+#   - 交易接口：設定交易密碼
+#
 # 使用方法：
 #   docker compose -f docker-compose.vps.yml up -d
-#
-# 環境變量：
-#   cp .env.vps.example .env.vps
-#   nano .env.vps  # 填入你的設定
 #
 # =============================================================================
 
 services:
-  # ==========================================================================
-  # 富途 OpenD (CLI 版本 - 唔需要 GUI/VNC)
-  # ==========================================================================
-  # 首次啟動需要做 SMS 驗證：
-  #   docker compose -f docker-compose.vps.yml logs futuopend
-  #   搵到類似 "Please visit: https://xxx.futunn.com/verify/xxx" 嘅連結
-  #   喺瀏覽器打開完成驗證
-  # ==========================================================================
-  futuopend:
-    build:
-      context: ./docker
-      dockerfile: Dockerfile.opend
-    container_name: futuopend
-    # ⚠️ 安全重點：唔好暴露 ports俾公網！
-    # Backend 透過 Docker network 內部訪問 (futuopend:11111)
-    # 如果暴露俾公網，黑客可以亂咁落單！
-    volumes:
-      - opend_data:/home/opend/FutuOpenD/data
-      - ${OPEN_D_KEY_PATH:-./docker/keys}:/home/opend/FutuOpenD/keys:ro
-      - ./docker/opend_config.ini:/home/opend/FutuOpenD/config/opend_config.ini:ro
-    restart: unless-stopped
-    networks:
-      - vcp-network
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "11111"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
   # ==========================================================================
   # Python Backend (FastAPI)
   # ==========================================================================
@@ -50,13 +24,13 @@ services:
     ports:
       - "127.0.0.1:8000:8000"  # 只監聽本地 loopback，Nginx 從本地 proxy
     environment:
-      - FUTU_HOST=futuopend
+      # OpenD 喺主機運行，Linux Docker 用 gateway IP (172.17.0.1)
+      - FUTU_HOST=172.17.0.1
       - FUTU_PORT=11111
       - FUTU_TRADE_PWD=${FUTU_TRADE_PWD}
       - PORT=8000
-    depends_on:
-      futuopend:
-        condition: service_healthy
+      # 停用日誌寫入，避免權限問題（沙盒 / VPS 都適用）
+      - FUTU_DISABLE_LOG=1
     restart: unless-stopped
     networks:
       - vcp-network
@@ -79,10 +53,6 @@ services:
     networks:
       - vcp-network
 
-volumes:
-  opend_data:
-    driver: local
-
 networks:
   vcp-network:
     driver: bridge
@@ -91,8 +61,7 @@ networks:
 # 安全設定説明
 # =============================================================================
 # 1. 所有 service ports 只監聽 127.0.0.1，防止被公網直接訪問
-# 2. OpenD 完全唔暴露 port，只能透過 internal Docker network 訪問
-# 3. 請確保 Nginx 配置正確，使用 HTTPS + Basic Auth 或其他認證方式
+# 2. 請確保 Nginx 配置正確，使用 HTTPS + Basic Auth 或其他認證方式
 #
 # 建議的 Nginx 配置：
 #   - 強制 HTTPS

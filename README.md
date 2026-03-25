@@ -105,3 +105,28 @@ docker-compose up --build -d
 | 美股 | 直接輸入 | NVDA |
 | 港股 | 純數字 | 00700 |
 | A股 | 純數字 | 600519 |
+
+---
+
+## 疑難排解
+
+### 富途 API 連接失敗 / 日誌權限問題
+
+如果你遇到以下錯誤：
+```
+[Errno 1] Operation not permitted: '/Users/xxx/.com.futunn.FutuOpenD/Log/py_2026_03_25.log'
+```
+
+**解決方法**：
+
+1. 喺 `.env` 入面設置 `FUTU_DISABLE_LOG=1`
+2. 然後重啟服務
+
+或者手動創建日誌目錄：
+```bash
+mkdir -p ~/.com.futunn.FutuOpenD/Log
+chmod 755 ~/.com.futunn.FutuOpenD
+chmod 755 ~/.com.futunn.FutuOpenD/Log
+```
+
+詳細說明請睇 [VPS_DEPLOYMENT_GUIDE.md](VPS_DEPLOYMENT_GUIDE.md)

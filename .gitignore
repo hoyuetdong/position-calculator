@@ -34,15 +34,10 @@ yarn-error.log*
 
 # RSA keys
 *.pem
-docker/keys/
-docker/*.pem
 !docker/*.example
 
 # futu openD config (local)
 futu_data/
-
-# futu openD config (VPS) - CONTAINS SENSITIVE CREDENTIALS!
-docker/opend_config.ini
 
 # vercel
 .vercel

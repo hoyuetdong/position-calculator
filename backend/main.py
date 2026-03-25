@@ -10,12 +10,16 @@ Environment variables:
   FUTU_PORT — OpenD port (default: 11111)
   FUTU_TRADE_PWD — Trading password (optional)
   PORT — API server port (default: 8000)
+  FUTU_DISABLE_LOG — Set to 1 to disable futu-api log file writing (avoids permission issues)
 """
 import os
+import sys
 import json
 import httpx
 import threading
 import time
+import logging
+from io import StringIO
 from dotenv import load_dotenv
 
 # 自動加載專案根目錄的 .env 檔案
@@ -26,6 +30,76 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 
 _HKD_USD_FALLBACK = 1 / 7.78
+
+
+# ============================================================================
+# 停用 futu-api 日誌寫入（避免權限問題）
+# ============================================================================
+def _disable_futu_logging():
+    """
+    如果 FUTU_DISABLE_LOG=1，將 futu-api 的日誌輸出重定向到 /dev/null
+    或者使用可寫入的位置，避免權限問題。
+    呢個一定要喺 import futu 之前調用。
+    """
+    if os.getenv("FUTU_DISABLE_LOG", "0") == "1":
+        print("[Config] FUTU_DISABLE_LOG=1, disabling futu-api file logging")
+
+        # 嘗試創建日誌目錄（如果唔存在）
+        log_dir = os.path.expanduser("~/.com.futunn.FutuOpenD/Log")
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except PermissionError:
+            # 如果創建失敗，使用 /tmp
+            log_dir = "/tmp/futu_logs"
+            os.makedirs(log_dir, exist_ok=True)
+            os.environ["FUTU_LOG_DIR"] = log_dir
+
+        # 替換 ft_logger 的 FileHandler 為 NullHandler
+        try:
+            import futu.common.ft_logger as ft_logger_module
+
+            # 保存原來的 logger 類
+            original_ftlog = ft_logger_module.FTLog
+
+            class SilentFTLog:
+                """抑制日誌文件輸出的 FTLog 替代類"""
+
+                def __init__(self):
+                    # 設置 NullHandler，避免寫入文件
+                    self.logger = logging.getLogger("futu")
+                    self.logger.setLevel(logging.CRITICAL)
+                    # 清除所有現有的 handlers
+                    self.logger.handlers = []
+                    # 添加 NullHandler
+                    self.logger.addHandler(logging.NullHandler())
+
+                def debug(self, *args, **kwargs):
+                    pass
+
+                def info(self, *args, **kwargs):
+                    pass
+
+                def warning(self, *args, **kwargs):
+                    pass
+
+                def error(self, *args, **kwargs):
+                    pass
+
+                def critical(self, *args, **kwargs):
+                    pass
+
+            # 替換原始類
+            ft_logger_module.FTLog = SilentFTLog
+            print(f"[Config] Futu logging redirected to null handler (log dir: {log_dir})")
+        except ImportError:
+            # futu 未安裝，繼續
+            pass
+        except Exception as e:
+            print(f"[Config] Warning: Could not patch futu logging: {e}")
+
+
+# 盡早調用，喺 import futu 之前
+_disable_futu_logging()
 
 
 # ============================================================================
