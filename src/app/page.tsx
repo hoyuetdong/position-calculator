@@ -1189,7 +1189,9 @@ export default function Home() {
                 </button>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* 第一行：股票代號 | 訂單期限 */}
+              <div className="grid grid-cols-2 gap-4">
+                {/* 左邊：股票代號 */}
                 <div>
                   <label className="text-sm text-muted-foreground">股票代號</label>
                   <input
@@ -1201,85 +1203,84 @@ export default function Home() {
                   />
                 </div>
 
-                <div className="flex flex-col gap-3">
-                  {/* 期限選擇 - 固定喺右邊 */}
-                  <div>
-                    <label className="text-sm text-muted-foreground">訂單期限</label>
-                    <div className="flex gap-2 mt-1">
-                      <button
-                        type="button"
-                        onClick={() => setTimeInForce('DAY')}
-                        className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-                          timeInForce === 'DAY'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-secondary border border-border hover:border-primary/50'
-                        }`}
-                      >
-                        當日有效
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTimeInForce('GTC')}
-                        className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-                          timeInForce === 'GTC'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-secondary border border-border hover:border-primary/50'
-                        }`}
-                      >
-                        撤單前有效
-                      </button>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {timeInForce === 'DAY' && '今日收市前有效'}
-                      {timeInForce === 'GTC' && '直至主動撤單'}
-                    </p>
+                {/* 右邊：訂單期限 */}
+                <div>
+                  <label className="text-sm text-muted-foreground">訂單期限</label>
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => setTimeInForce('DAY')}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+                        timeInForce === 'DAY'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-secondary border border-border hover:border-primary/50'
+                      }`}
+                    >
+                      當日有效
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTimeInForce('GTC')}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+                        timeInForce === 'GTC'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-secondary border border-border hover:border-primary/50'
+                      }`}
+                    >
+                      撤單前有效
+                    </button>
                   </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {timeInForce === 'DAY' && '今日收市前有效'}
+                    {timeInForce === 'GTC' && '直至主動撤單'}
+                  </p>
+                </div>
+              </div>
+
+              {/* 第二行：買入價 | 止蝕價 */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-muted-foreground">{direction === 'LONG' ? '買入價 ($)' : '賣出價 ($)'}</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={entryPrice}
+                    onChange={(e) => setEntryPrice(e.target.value)}
+                    placeholder={direction === 'LONG' ? '買入價' : '賣出價'}
+                    className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
+                  />
                 </div>
 
-                <div className="flex gap-3">
-                  <div className="flex-1">
-                    <label className="text-sm text-muted-foreground">{direction === 'LONG' ? '買入價 ($)' : '賣出價 ($)'}</label>
+                <div>
+                  <label className="text-sm text-muted-foreground">止蝕價 ($)</label>
+                  <div className="flex gap-2">
                     <input
                       type="number"
                       step="0.01"
-                      value={entryPrice}
-                      onChange={(e) => setEntryPrice(e.target.value)}
-                      placeholder={direction === 'LONG' ? '買入價' : '賣出價'}
+                      value={stopLoss}
+                      onChange={(e) => setStopLoss(e.target.value)}
+                      placeholder="止蝕價"
                       className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
                     />
-                  </div>
-
-                  <div className="flex-1">
-                    <label className="text-sm text-muted-foreground">止蝕價 ($)</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={stopLoss}
-                        onChange={(e) => setStopLoss(e.target.value)}
-                        placeholder="止蝕價"
-                        className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
-                      />
-                      {suggestedStopLoss && (
-                        <button
-                          type="button"
-                          onClick={applySuggestedStopLoss}
-                          className="mt-1 px-3 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition-colors text-sm cursor-pointer"
-                          title={`建議: $${suggestedStopLoss.toFixed(2)} (${settings.atrMultiplier}x ATR)`}
-                        >
-                          <Info className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
+                    {suggestedStopLoss && (
+                      <button
+                        type="button"
+                        onClick={applySuggestedStopLoss}
+                        className="mt-1 px-3 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition-colors text-sm cursor-pointer"
+                        title={`建議: $${suggestedStopLoss.toFixed(2)} (${settings.atrMultiplier}x ATR)`}
+                      >
+                        <Info className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
-                {suggestedStopLoss && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
-                    {direction === 'SHORT' && <span className="text-loss ml-2">(止蝕喺上面)</span>}
-                  </p>
-                )}
               </div>
+              {suggestedStopLoss && (
+                <p className="text-xs text-muted-foreground -mt-2">
+                  建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
+                  {direction === 'SHORT' && <span className="text-loss ml-2">(止蝕喺上面)</span>}
+                </p>
+              )}
               
               {/* Risk Info */}
               <div className="bg-secondary/50 rounded-lg p-4">
