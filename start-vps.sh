@@ -37,8 +37,25 @@ if [ ! -d ".next/standalone" ]; then
     exit 1
 fi
 
+# Load environment variables from .env
+if [ -f ".env" ]; then
+    echo -e "${GREEN}載入 .env 環境變數...${NC}"
+    set -a
+    source .env
+    set +a
+fi
+
 # 創建 app screen，包含 backend 和 frontend 兩個 window
 echo -e "${GREEN}創建 app screen...${NC}"
+
+# 導出需要嘅環境變數俾後續使用
+export APP_PASSWORD
+export PYTHON_API_URL
+export FUTU_HOST
+export FUTU_PORT
+export FUTU_LOGIN_ACCOUNT
+export FUTU_TRADE_PWD
+export API_SECRET
 
 # Window 1: Backend
 screen -dmS app bash -c "cd $SCRIPT_DIR && python3 backend/main.py; exec bash"
@@ -46,8 +63,8 @@ screen -dmS app bash -c "cd $SCRIPT_DIR && python3 backend/main.py; exec bash"
 # 等一下 backend 啟動
 sleep 2
 
-# Window 2: Frontend
-screen -S app -X screen -t frontend bash -c "cd $SCRIPT_DIR/.next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash"
+# Window 2: Frontend (需要 APP_PASSWORD 俾 middleware)
+screen -S app -X screen -t frontend bash -c "cd $SCRIPT_DIR/.next/standalone && APP_PASSWORD='$APP_PASSWORD' PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash"
 
 # 等一下
 sleep 3
