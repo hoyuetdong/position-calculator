@@ -804,7 +804,7 @@ export default function Home() {
     }
     
     setOrdering(false)
-  }, [ticker, entryPrice, shares, direction, stopLoss, syncBrokerPositions])
+  }, [ticker, entryPrice, shares, direction, stopLoss, timeInForce, expireDate, syncBrokerPositions])
   
   // Handle environment switch
   const handleEnvSwitch = useCallback(async (newEnv: 'SIMULATE' | 'REAL') => {
