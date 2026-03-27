@@ -1365,7 +1365,7 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setTicker(''); setEntryPrice(''); setStopLoss(''); setTimeInForce('DAY'); setExpireDate(''); setQuoteData(null); setAtr(null); setHistoricalData([]); setDirection('LONG'); }}
+                  onClick={() => { setTicker(''); setEntryPrice(''); setStopLoss(''); setTimeInForce('DAY'); setQuoteData(null); setAtr(null); setHistoricalData([]); setDirection('LONG'); }}
                   className="px-4 py-3 bg-secondary border border-border rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
