@@ -7,10 +7,12 @@ export async function POST(request: NextRequest) {
 
     // Forward to Python backend
     const backendUrl = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+    const apiKey = process.env.API_SECRET || ''
     const response = await fetchWithTimeout(`${backendUrl}/api/order`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(apiKey && { 'X-API-Key': apiKey }),
       },
       body: JSON.stringify(body),
     })

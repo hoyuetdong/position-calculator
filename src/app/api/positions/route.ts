@@ -11,9 +11,11 @@ export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
+    const apiKey = process.env.API_SECRET || ''
     const response = await fetchWithTimeout(`${PYTHON_API_URL}/api/positions`, {
       headers: {
         'Content-Type': 'application/json',
+        ...(apiKey && { 'X-API-Key': apiKey }),
       },
       cache: 'no-store',
     })

@@ -25,11 +25,26 @@ from dotenv import load_dotenv
 # 自動加載專案根目錄的 .env 檔案
 load_dotenv()
 from typing import List, Dict, Tuple, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
+from functools import wraps
 from datetime import datetime, timezone
 
 _HKD_USD_FALLBACK = 1 / 7.78
+
+# API Key authentication
+_API_SECRET = os.getenv("API_SECRET", "")
+
+
+def verify_api_key(x_api_key: str = Header(None, alias="X-API-Key")):
+    """
+    Verify API key for all protected endpoints.
+    If API_SECRET is not set, skip authentication (for local dev).
+    """
+    if not _API_SECRET:
+        return  # Skip auth if not configured
+    if x_api_key != _API_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 # ============================================================================
@@ -1081,7 +1096,7 @@ def get_env():
     )
 
 
-@app.post("/api/env", response_model=EnvResponse)
+@app.post("/api/env", response_model=EnvResponse, dependencies=[Depends(verify_api_key)])
 def set_env(request: SetEnvRequest):
     """設定當前交易環境 (SIMULATE 或 REAL)."""
     try:
@@ -1095,7 +1110,7 @@ def set_env(request: SetEnvRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/api/positions", response_model=SyncResponse)
+@app.get("/api/positions", response_model=SyncResponse, dependencies=[Depends(verify_api_key)])
 def get_positions():
     """
     Get all stock/ETF positions from Futu/Moomoo.
@@ -1136,7 +1151,7 @@ def get_positions():
         )
 
 
-@app.get("/api/balance", response_model=BalanceResponse)
+@app.get("/api/balance", response_model=BalanceResponse, dependencies=[Depends(verify_api_key)])
 def get_account_balance():
     """
     Get account balance in USD from Futu/Moomoo US account.
@@ -1172,7 +1187,7 @@ def get_account_balance():
         )
 
 
-@app.post("/api/order", response_model=OrderResponse)
+@app.post("/api/order", response_model=OrderResponse, dependencies=[Depends(verify_api_key)])
 def place_order(order: OrderRequest):
     """
     Place a buy/sell order via Futu OpenD.
@@ -1236,7 +1251,7 @@ def place_order(order: OrderRequest):
         )
 
 
-@app.get("/api/pending-stops", response_model=PendingStopOrdersResponse)
+@app.get("/api/pending-stops", response_model=PendingStopOrdersResponse, dependencies=[Depends(verify_api_key)])
 def get_pending_stop_orders():
     """
     取得所有有待觸發止蝕單狀態.
