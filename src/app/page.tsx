@@ -481,8 +481,7 @@ export default function Home() {
   const [direction, setDirection] = useState<'LONG' | 'SHORT'>('LONG')  // 持倉方向
   const [entryPrice, setEntryPrice] = useState('')  // 改名：entryPrice 通用於 LONG/SHORT
   const [stopLoss, setStopLoss] = useState('')
-  const [timeInForce, setTimeInForce] = useState<'DAY' | 'GTC' | 'GTD'>('DAY')
-  const [expireDate, setExpireDate] = useState('')
+  const [timeInForce, setTimeInForce] = useState<'DAY' | 'GTC'>('DAY')
   const [quoteData, setQuoteData] = useState<QuoteData | null>(null)
   const [atr, setAtr] = useState<number | null>(null)
   const [historicalData, setHistoricalData] = useState<{time: number; open: number; high: number; low: number; close: number}[]>([])
@@ -781,7 +780,6 @@ export default function Home() {
         side: direction === 'LONG' ? 'BUY' : 'SELL',
         stop_loss_price: stopLoss ? parseFloat(stopLoss) : undefined,
         time_in_force: timeInForce,
-        expire_date: timeInForce === 'GTD' ? expireDate : undefined,
       })
 
       setOrderResult({
@@ -804,7 +802,7 @@ export default function Home() {
     }
     
     setOrdering(false)
-  }, [ticker, entryPrice, shares, direction, stopLoss, timeInForce, expireDate, syncBrokerPositions])
+  }, [ticker, entryPrice, shares, direction, stopLoss, timeInForce, syncBrokerPositions])
   
   // Handle environment switch
   const handleEnvSwitch = useCallback(async (newEnv: 'SIMULATE' | 'REAL') => {
@@ -1202,7 +1200,42 @@ export default function Home() {
                     className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
                   />
                 </div>
-                
+
+                <div className="flex flex-col gap-3">
+                  {/* 期限選擇 - 固定喺右邊 */}
+                  <div>
+                    <label className="text-sm text-muted-foreground">訂單期限</label>
+                    <div className="flex gap-2 mt-1">
+                      <button
+                        type="button"
+                        onClick={() => setTimeInForce('DAY')}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+                          timeInForce === 'DAY'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary border border-border hover:border-primary/50'
+                        }`}
+                      >
+                        當日有效
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTimeInForce('GTC')}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+                          timeInForce === 'GTC'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary border border-border hover:border-primary/50'
+                        }`}
+                      >
+                        撤單前有效
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {timeInForce === 'DAY' && '今日收市前有效'}
+                      {timeInForce === 'GTC' && '直至主動撤單'}
+                    </p>
+                  </div>
+                </div>
+
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="text-sm text-muted-foreground">{direction === 'LONG' ? '買入價 ($)' : '賣出價 ($)'}</label>
@@ -1240,66 +1273,12 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-                  {suggestedStopLoss && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
-                      {direction === 'SHORT' && <span className="text-loss ml-2">(止蝕喺上面)</span>}
-                    </p>
-                  )}
-
-                  {/* 期限選擇 */}
-                  <div className="mt-4 pt-4 border-t border-border">
-                    <label className="text-sm text-muted-foreground mb-2 block">訂單期限</label>
-                    <div className="flex gap-2 mb-2">
-                      <button
-                        type="button"
-                        onClick={() => setTimeInForce('DAY')}
-                        className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-                          timeInForce === 'DAY'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-secondary border border-border hover:border-primary/50'
-                        }`}
-                      >
-                        當日有效
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTimeInForce('GTC')}
-                        className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-                          timeInForce === 'GTC'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-secondary border border-border hover:border-primary/50'
-                        }`}
-                      >
-                        撤單前有效
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTimeInForce('GTD')}
-                        className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-                          timeInForce === 'GTD'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-secondary border border-border hover:border-primary/50'
-                        }`}
-                      >
-                        指定日期前
-                      </button>
-                    </div>
-                    {timeInForce === 'GTD' && (
-                      <input
-                        type="date"
-                        value={expireDate}
-                        onChange={(e) => setExpireDate(e.target.value)}
-                        min={new Date().toISOString().split('T')[0]}
-                        className="w-full mt-2 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                      />
-                    )}
-                    <p className="text-xs text-muted-foreground mt-2">
-                      {timeInForce === 'DAY' && '訂單喺今日收市前有效，未成交會自動取消'}
-                      {timeInForce === 'GTC' && '訂單一直有效，直至你主動撤單'}
-                      {timeInForce === 'GTD' && '訂單喺指定日期前有效（包括當日）'}
-                    </p>
-                  </div>
+                {suggestedStopLoss && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
+                    {direction === 'SHORT' && <span className="text-loss ml-2">(止蝕喺上面)</span>}
+                  </p>
+                )}
               </div>
               
               {/* Risk Info */}
@@ -1599,9 +1578,7 @@ export default function Home() {
                   <div className="flex justify-between mb-2">
                     <span className="text-muted-foreground">期限:</span>
                     <span className="font-mono">
-                      {timeInForce === 'DAY' && '當日有效'}
-                      {timeInForce === 'GTC' && '撤單前有效'}
-                      {timeInForce === 'GTD' && `至 ${expireDate}`}
+                      {timeInForce === 'DAY' ? '當日有效' : '撤單前有效'}
                     </span>
                   </div>
                   {stopLoss && (
