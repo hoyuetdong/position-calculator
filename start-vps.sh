@@ -43,19 +43,21 @@ if [ -f ".env" ]; then
     set -a
     source .env
     set +a
+    
+    # 創建 wrapper script 俾 frontend（因為 screen session 唔會 inherit 環境變數）
+    cat > /tmp/start-frontend.sh << EOFWRAPPER
+#!/bin/bash
+export APP_PASSWORD='${APP_PASSWORD}'
+export PYTHON_API_URL='${PYTHON_API_URL}'
+cd ${SCRIPT_DIR}/.next/standalone
+exec node server.js
+EOFWRAPPER
+    chmod +x /tmp/start-frontend.sh
+    echo -e "${GREEN}✓ Frontend wrapper script 已創建${NC}"
 fi
 
 # 創建 app screen，包含 backend 和 frontend 兩個 window
 echo -e "${GREEN}創建 app screen...${NC}"
-
-# 導出需要嘅環境變數俾後續使用
-export APP_PASSWORD
-export PYTHON_API_URL
-export FUTU_HOST
-export FUTU_PORT
-export FUTU_LOGIN_ACCOUNT
-export FUTU_TRADE_PWD
-export API_SECRET
 
 # Window 1: Backend
 screen -dmS app bash -c "cd $SCRIPT_DIR && python3 backend/main.py; exec bash"
@@ -63,8 +65,8 @@ screen -dmS app bash -c "cd $SCRIPT_DIR && python3 backend/main.py; exec bash"
 # 等一下 backend 啟動
 sleep 2
 
-# Window 2: Frontend (需要 APP_PASSWORD 俾 middleware)
-screen -S app -X screen -t frontend bash -c "cd $SCRIPT_DIR/.next/standalone && APP_PASSWORD='$APP_PASSWORD' PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash"
+# Window 2: Frontend (使用 wrapper script)
+screen -S app -X screen -t frontend bash -c '/tmp/start-frontend.sh; exec bash'
 
 # 等一下
 sleep 3
