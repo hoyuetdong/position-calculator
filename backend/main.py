@@ -345,7 +345,7 @@ def _place_stop_order(
         # 止損單方向
         trd_side = futu.TrdSide.BUY if direction == "SHORT" else futu.TrdSide.SELL
         
-        # Place STOP order
+        # Place STOP order (GTC = Good Till Cancelled, 撤單前有效)
         ret, data = ctx.place_order(
             price=0,  # STOP orders don't use price, use aux_price as trigger
             qty=quantity,
@@ -355,6 +355,7 @@ def _place_stop_order(
             trd_env=trd_env_enum,
             acc_id=acc_id,
             aux_price=stop_loss_price,  # Trigger price
+            time_in_force=futu.TimeInForce.GTC,  # 撤單前有效
         )
         
         print(f"[StopMonitor] STOP order result: ret={ret}, data={data}")
@@ -699,7 +700,9 @@ def _place_order(
     port: int,
     trade_pwd: str = "",
     trd_env: Optional[str] = None,  # 如果為None，會自動使用動態環境
-    stop_loss_price: Optional[float] = None
+    stop_loss_price: Optional[float] = None,
+    time_in_force: str = "DAY",  # DAY / GTC / GTD
+    expire_date: Optional[str] = None,  # YYYY-MM-DD, only for GTD
 ) -> Dict:
     """
     Place an order via Futu OpenD.
@@ -715,6 +718,8 @@ def _place_order(
         trade_pwd: Trading password
         trd_env: "SIMULATE" or "REAL". 如果為None，會使用動態環境變數
         stop_loss_price: Optional stop loss price to place automatic STOP order (only for BUY orders)
+        time_in_force: "DAY" (當日有效) / "GTC" (撤單前有效) / "GTD" (指定日期前有效)
+        expire_date: Format "YYYY-MM-DD", only used when time_in_force="GTD"
 
     Returns:
         Dict with order_id, stop_order_id, status and message
@@ -772,6 +777,14 @@ def _place_order(
             price = 0
         else:
             order_type_enum = futu.OrderType.NORMAL
+
+        # Determine time_in_force
+        if time_in_force.upper() == "GTC":
+            time_in_force_enum = futu.TimeInForce.GTC
+        elif time_in_force.upper() == "GTD" and expire_date:
+            time_in_force_enum = futu.TimeInForce.GTD
+        else:
+            time_in_force_enum = futu.TimeInForce.DAY
         
         # Determine side
         if side.upper() == "BUY":
@@ -780,15 +793,23 @@ def _place_order(
             side_enum = futu.TrdSide.SELL
         
         # Place the order
-        ret, data = ctx.place_order(
-            price=price,
-            qty=quantity,
-            code=futu_code,
-            trd_side=side_enum,
-            order_type=order_type_enum,
-            trd_env=trd_env_enum,
-            acc_id=acc_id,
-        )
+        place_order_kwargs = {
+            "price": price,
+            "qty": quantity,
+            "code": futu_code,
+            "trd_side": side_enum,
+            "order_type": order_type_enum,
+            "trd_env": trd_env_enum,
+            "acc_id": acc_id,
+            "time_in_force": time_in_force_enum,
+        }
+
+        # For GTD orders, set expire date
+        if time_in_force.upper() == "GTD" and expire_date:
+            # expire_date format should be YYYY-MM-DD HH:MM:SS
+            place_order_kwargs["expire_date"] = f"{expire_date} 23:59:59"
+
+        ret, data = ctx.place_order(**place_order_kwargs)
         
         print(f"[Order] place_order ret={ret}, data={data}")
         
@@ -925,6 +946,8 @@ class OrderRequest(BaseModel):
     quantity: int
     order_type: str = "LIMIT"  # "LIMIT" or "MARKET"
     side: str = "BUY"  # "BUY" or "SELL"
+    time_in_force: str = "DAY"  # "DAY" (當日有效) / "GTC" (撤單前有效) / "GTD" (指定日期前有效)
+    expire_date: Optional[str] = None  # Format: "YYYY-MM-DD", only used when time_in_force="GTD"
     stop_loss_price: Optional[float] = None  # Stop loss price for automatic stop order
     remark: Optional[str] = None
 
@@ -1211,18 +1234,20 @@ def get_account_balance():
 def place_order(order: OrderRequest):
     """
     Place a buy/sell order via Futu OpenD.
-    
+
     IMPORTANT: This endpoint uses SIMULATE (paper trading) environment by default.
     To switch to REAL trading, set the environment variable TRADE_ENV=REAL.
-    
+
     Required fields:
     - symbol: Stock symbol (e.g., AAPL, 00700, 700.HK)
     - price: Order price (ignored for MARKET orders)
     - quantity: Number of shares
-    
+
     Optional fields:
     - order_type: "LIMIT" (default) or "MARKET"
     - side: "BUY" (default) or "SELL"
+    - time_in_force: "DAY" (當日有效) / "GTC" (撤單前有效) / "GTD" (指定日期前有效)
+    - expire_date: "YYYY-MM-DD", only used when time_in_force="GTD"
     - remark: Optional order note
     """
     # Get config from environment
@@ -1239,6 +1264,7 @@ def place_order(order: OrderRequest):
     
     print(f"[Order] Request: {order.model_dump_json()}")
     print(f"[Order] Trade environment: {trd_env}")
+    print(f"[Order] Time in force: {order.time_in_force}, expire_date: {order.expire_date}")
 
     try:
         result = _place_order(
@@ -1252,6 +1278,8 @@ def place_order(order: OrderRequest):
             trade_pwd=trade_pwd,
             trd_env=trd_env,
             stop_loss_price=order.stop_loss_price,
+            time_in_force=order.time_in_force,
+            expire_date=order.expire_date,
         )
         
         return OrderResponse(

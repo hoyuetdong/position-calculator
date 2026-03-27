@@ -43,6 +43,8 @@ export interface OrderRequest {
   quantity: number
   order_type?: string
   side?: string
+  time_in_force?: string  // "DAY" | "GTC" | "GTD"
+  expire_date?: string    // "YYYY-MM-DD", only for GTD
   stop_loss_price?: number
   remark?: string
 }
