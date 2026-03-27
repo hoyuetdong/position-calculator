@@ -1204,7 +1204,7 @@ export default function Home() {
                 </div>
 
                 {/* 右邊：買入價 & 止蝕價 */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-sm text-muted-foreground">{direction === 'LONG' ? '買入價 ($)' : '賣出價 ($)'}</label>
                     <input
@@ -1213,7 +1213,7 @@ export default function Home() {
                       value={entryPrice}
                       onChange={(e) => setEntryPrice(e.target.value)}
                       placeholder={direction === 'LONG' ? '買入' : '賣出'}
-                      className="w-full mt-1 px-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                      className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
                     />
                   </div>
 
@@ -1226,7 +1226,7 @@ export default function Home() {
                         value={stopLoss}
                         onChange={(e) => setStopLoss(e.target.value)}
                         placeholder="止蝕"
-                        className="w-full mt-1 px-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                        className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
                       />
                       {suggestedStopLoss && (
                         <button
@@ -1251,7 +1251,7 @@ export default function Home() {
                 {/* 右邊：訂單期限 */}
                 <div>
                   <label className="text-sm text-muted-foreground">訂單期限</label>
-                  <div className="flex gap-2 mt-1">
+                  <div className="flex gap-4 mt-1">
                     <button
                       type="button"
                       onClick={() => setTimeInForce('DAY')}
