@@ -64,11 +64,12 @@ function calculateSMAData(data: number[], period: number): (number | null)[] {
 
 export default function CandlestickChart({ 
   data, 
-  buyPrice, 
-  stopLoss, 
+  direction,
+  entryPrice,
+  stopLoss,
   atr, 
   atrMultiplier = 1.5,
-  onBuyPriceChange, 
+  onEntryPriceChange, 
   onStopLossChange 
 }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
