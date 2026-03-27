@@ -643,9 +643,9 @@ export default function Home() {
           }
           setAtr(calculatedAtr)
           
-          // Auto-fill buy point with current price
+          // Auto-fill entry price with current price
           if (quote.lastPrice) {
-            setBuyPoint(quote.lastPrice.toFixed(2))
+            setEntryPrice(quote.lastPrice.toFixed(2))
           }
         } catch (error) {
           console.error('Error fetching quote:', error)
