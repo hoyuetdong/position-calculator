@@ -481,7 +481,7 @@ export default function Home() {
   const [direction, setDirection] = useState<'LONG' | 'SHORT'>('LONG')  // 持倉方向
   const [entryPrice, setEntryPrice] = useState('')  // 改名：entryPrice 通用於 LONG/SHORT
   const [stopLoss, setStopLoss] = useState('')
-  const [timeInForce, setTimeInForce] = useState<'DAY' | 'GTC'>('DAY')
+  const [timeInForce, setTimeInForce] = useState<'DAY' | 'GTC'>('GTC')
   const [quoteData, setQuoteData] = useState<QuoteData | null>(null)
   const [atr, setAtr] = useState<number | null>(null)
   const [historicalData, setHistoricalData] = useState<{time: number; open: number; high: number; low: number; close: number}[]>([])
@@ -1199,7 +1199,7 @@ export default function Home() {
                     value={ticker}
                     onChange={(e) => setTicker(e.target.value.toUpperCase())}
                     placeholder="例如: NVDA, 00700, 9888"
-                    className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
+                    className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
                   />
                 </div>
 
@@ -1373,7 +1373,7 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setTicker(''); setEntryPrice(''); setStopLoss(''); setTimeInForce('DAY'); setQuoteData(null); setAtr(null); setHistoricalData([]); setDirection('LONG'); }}
+                  onClick={() => { setTicker(''); setEntryPrice(''); setStopLoss(''); setTimeInForce('GTC'); setQuoteData(null); setAtr(null); setHistoricalData([]); setDirection('LONG'); }}
                   className="px-4 py-3 bg-secondary border border-border rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />

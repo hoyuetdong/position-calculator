@@ -55,7 +55,7 @@ if [ -f ".env" ]; then
     # 創建 wrapper script 俾 frontend（因為 screen session 唔會 inherit 環境變數）
     cat > /tmp/start-frontend.sh << EOFWRAPPER
 #!/bin/bash
-export HOSTNAME='127.0.0.1'
+export HOSTNAME='0.0.0.0'
 export PORT='3000'
 export APP_PASSWORD='${APP_PASSWORD}'
 export PYTHON_API_URL='${PYTHON_API_URL}'
@@ -71,7 +71,7 @@ fi
 if [ -f ".env" ]; then
     echo -e "${GREEN}更新 standalone .env...${NC}"
     grep -E '^(APP_PASSWORD|PYTHON_API_URL|API_SECRET)=' .env > .next/standalone/.env
-    echo "HOSTNAME=127.0.0.1" >> .next/standalone/.env
+    echo "HOSTNAME=0.0.0.0" >> .next/standalone/.env
 fi
 
 echo ""
