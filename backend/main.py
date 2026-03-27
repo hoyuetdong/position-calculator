@@ -781,7 +781,7 @@ def _place_order(
         # Determine time_in_force
         if time_in_force.upper() == "GTC":
             time_in_force_enum = futu.TimeInForce.GTC
-        elif time_in_force.upper() == "GTD" and expire_date:
+        elif time_in_force.upper() == "GTD" and expire_date and expire_date.strip():
             time_in_force_enum = futu.TimeInForce.GTD
         else:
             time_in_force_enum = futu.TimeInForce.DAY
@@ -805,9 +805,10 @@ def _place_order(
         }
 
         # For GTD orders, set expire date
-        if time_in_force.upper() == "GTD" and expire_date:
+        if time_in_force.upper() == "GTD" and expire_date and expire_date.strip():
             # expire_date format should be YYYY-MM-DD HH:MM:SS
-            place_order_kwargs["expire_date"] = f"{expire_date} 23:59:59"
+            expire_date_str = expire_date.strip()
+            place_order_kwargs["expire_date"] = f"{expire_date_str} 23:59:59"
 
         ret, data = ctx.place_order(**place_order_kwargs)
         
