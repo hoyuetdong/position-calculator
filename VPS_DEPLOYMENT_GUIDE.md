@@ -197,7 +197,7 @@ curl http://localhost:8000/api/positions -H 'X-API-Key: vjItBPUlggAEJPZRoZ3xbNin
 
 > **注意**：OpenD 必須先運行！如果 OpenD 未運行，`start-vps.sh` 會顯示後端啟動失敗。
 
-### Step 7: Nginx 反向代理（可選）
+### Step 7: Nginx 反向代理
 
 ```bash
 # 創建 Nginx 配置
@@ -205,20 +205,47 @@ nano /etc/nginx/sites-available/position-calculator
 ```
 
 ```nginx
-server {
-    listen 80;
-    server_name your-domain.com;  # 或 IP
+# VPS Position Calculator - Nginx Configuration
+# 所有 /api/* 必須走 Next.js → Backend（Next.js 會自動加 API Key）
 
+upstream frontend {
+    server 127.0.0.1:3000;
+    keepalive 64;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    # 重要：所有 /api/* 走 Next.js（Next.js 會自動加 X-API-Key）
+    location /api/ {
+        proxy_pass http://frontend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Frontend (Next.js)
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://frontend;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_cache_bypass $http_upgrade;
     }
 }
 ```
+
+> **⚠️ 重要**：`/api/*` 必須走 Next.js，唔可以直接去 Backend！
+> 如果直接去 Backend，會因為冇 API Key 而 401 Unauthorized。
+> Next.js API Route 會自動從環境變量讀取 `API_SECRET` 並加到 Header。
 
 ```bash
 # 啟用配置
@@ -414,14 +441,18 @@ screen -ls
 
 ### 更新代碼後重啟（重新 Build）
 
+> **注意**：呢個流程唔會 kill OpenD，保持 OpenD 運行。
+
 ```bash
 ssh root@107.173.153.41
 
 cd /opt/vcp-calculator
 
-# 停止舊服務
+# 停止舊服務（唔好 kill opend！）
 screen -S app -X quit 2>/dev/null
+screen -S frontend -X quit 2>/dev/null
 pkill -f 'node' 2>/dev/null
+pkill -f 'main.py' 2>/dev/null
 
 # Pull 最新代碼
 git pull origin main
@@ -434,6 +465,7 @@ cat > .next/standalone/.env << 'EOF'
 APP_PASSWORD=Yy442398!!
 PYTHON_API_URL=http://localhost:8000
 API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
+HOSTNAME=127.0.0.1
 EOF
 
 # 創建 static files symlink（重要！否則 CSS/JS 會 404）
@@ -443,10 +475,14 @@ ln -sf ../../static static
 # 返回主目錄
 cd /opt/vcp-calculator
 
-# 創建 wrapper script 俾 frontend
+# 創建 wrapper script 俾 frontend（bind 127.0.0.1）
 cat > /tmp/start-frontend.sh << 'EOFWRAPPER'
 #!/bin/bash
+export HOSTNAME='127.0.0.1'
+export PORT='3000'
 export APP_PASSWORD='Yy442398!!'
+export PYTHON_API_URL='http://localhost:8000'
+export API_SECRET='vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A='
 cd /opt/vcp-calculator/.next/standalone
 exec node server.js
 EOFWRAPPER
@@ -492,9 +528,17 @@ Yahoo Finance ──▶ Backend ──▶ Frontend (:3000)
 
 ## 快速部署
 
+> **注意**：呢個流程唔會 kill OpenD，保持 OpenD 運行。
+
 ```bash
 ssh root@107.173.153.41
 cd /opt/vcp-calculator
+
+# 停止舊服務（唔好 kill opend！）
+screen -S app -X quit 2>/dev/null
+screen -S frontend -X quit 2>/dev/null
+pkill -f 'node' 2>/dev/null
+pkill -f 'main.py' 2>/dev/null
 
 # 拉取代碼
 git pull origin main
@@ -502,23 +546,36 @@ git pull origin main
 # Build
 npm run build
 
-# 配置環境
+# 配置環境（HOSTNAME=127.0.0.1 綁定本地）
 cat > .next/standalone/.env << EOF
 APP_PASSWORD=Yy442398!!
 PYTHON_API_URL=http://localhost:8000
 API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
+HOSTNAME=127.0.0.1
 EOF
 
 mkdir -p .next/standalone/.next
 ln -sf ../../static .next/standalone/.next/static
 
-# 殺舊進程
-pkill -f "node"; pkill -f "main.py"; sleep 1
+# 創建 wrapper script（bind 127.0.0.1）
+cat > /tmp/start-frontend.sh << 'EOFWRAPPER'
+#!/bin/bash
+export HOSTNAME='127.0.0.1'
+export PORT='3000'
+export APP_PASSWORD='Yy442398!!'
+export PYTHON_API_URL='http://localhost:8000'
+export API_SECRET='vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A='
+cd /opt/vcp-calculator/.next/standalone
+exec node server.js
+EOFWRAPPER
+chmod +x /tmp/start-frontend.sh
 
-# 啟動
-screen -dmS app bash -c "cd /opt/vcp-calculator && source venv/bin/activate && python3 backend/main.py; exec bash"
+# 啟動 backend
+screen -dmS app bash -c 'cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
 sleep 3
-screen -dmS frontend bash -c "export APP_PASSWORD='Yy442398!!'; cd /opt/vcp-calculator/.next/standalone && exec node server.js; exec bash"
+
+# 啟動 frontend
+screen -dmS frontend bash -c '/tmp/start-frontend.sh; exec bash'
 ```
 
 ## 部署後驗證
