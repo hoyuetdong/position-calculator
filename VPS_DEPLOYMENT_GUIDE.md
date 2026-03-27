@@ -152,9 +152,16 @@ cd /opt/vcp-calculator
 
 # 1. 確保 .env 設定正確
 nano .env
-# 確認 FUTU_HOST=170.106.62.115（remote OpenD）
+# 確認以下內容存在：
+# - APP_PASSWORD=Yy442398!!
+# - API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
+# - FUTU_TRADE_PWD=442398
+# - FUTU_LOGIN_PWD_MD5=eeef0f684aa5e2e5c1d1a51b4bf5643b
 
-# 2. 一鍵啟動！（自動安裝依賴、殺舊進程、啟動服務）
+# 2. 拉取最新代碼
+git pull origin main
+
+# 3. 一鍵啟動！（自動安裝依賴、殺舊進程、啟動服務）
 ./start-vps.sh
 ```
 
@@ -162,6 +169,14 @@ nano .env
 
 ```bash
 ./stop-vps.sh
+```
+
+**重要：每次 git pull 後需要重新 build！**
+
+```bash
+git pull
+npm run build
+./start-vps.sh
 ```
 
 **常用命令：**
@@ -176,8 +191,8 @@ tail -f /tmp/position-calculator-frontend.log
 # 測試後端健康狀態
 curl http://localhost:8000/api/health
 
-# 測試持倉 API
-curl http://localhost:8000/api/positions
+# 測試持倉 API（需要 API key）
+curl http://localhost:8000/api/positions -H 'X-API-Key: vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A='
 ```
 
 > **注意**：OpenD 必須先運行！如果 OpenD 未運行，`start-vps.sh` 會顯示後端啟動失敗。
@@ -296,7 +311,8 @@ tail -f /tmp/position-calculator-frontend.log
 
 | Screen 名 | 用途 | 狀態 |
 |-----------|------|------|
-| `app` | Position Calculator (Backend + Frontend) | 必運行 |
+| `app` | Python Backend (FastAPI) | 必運行 |
+| `frontend` | Next.js Frontend | 必運行 |
 | `opend` | 富途 OpenD | 必運行 |
 
 ### 常用命令
@@ -321,15 +337,28 @@ screen -r opend
 # 進入 VPS
 ssh root@107.173.153.41
 
-# 停止舊的 app screen
-screen -S app -X quit
+# 停止舊的 app screen 和 frontend
+screen -S app -X quit 2>/dev/null
+pkill -f 'node' 2>/dev/null
 
-# 重建 app screen（backend + frontend）
 cd /opt/vcp-calculator
 
-# 創建新 screen，包含 backend 和 frontend 兩個 window
-screen -dmS app bash -c 'echo "Starting backend..."; cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
-screen -S app -X screen -t frontend -md bash -c 'echo "Starting frontend..."; cd /opt/vcp-calculator/.next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash'
+# 創建 wrapper script 俾 frontend
+cat > /tmp/start-frontend.sh << 'EOFWRAPPER'
+#!/bin/bash
+export APP_PASSWORD='Yy442398!!'
+cd /opt/vcp-calculator/.next/standalone
+exec node server.js
+EOFWRAPPER
+chmod +x /tmp/start-frontend.sh
+
+# 創建 backend screen
+screen -dmS app bash -c 'cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
+
+sleep 3
+
+# 創建 frontend screen
+screen -dmS frontend bash -c '/tmp/start-frontend.sh; exec bash'
 
 # 確認狀態
 screen -ls
@@ -343,21 +372,52 @@ ssh root@107.173.153.41
 cd /opt/vcp-calculator
 
 # 停止舊服務
-screen -S app -X quit
+screen -S app -X quit 2>/dev/null
+pkill -f 'node' 2>/dev/null
 
 # Pull 最新代碼
-git pull
+git pull origin main
 
-# 重新 Build
+# 重新 Build（這個會把 API_SECRET 打包進去）
 npm run build
 
-# 重啟服務
+# 確保 .next/standalone/.env 有 API_SECRET（重要！）
+cat > .next/standalone/.env << 'EOF'
+APP_PASSWORD=Yy442398!!
+PYTHON_API_URL=http://localhost:8000
+API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
+EOF
+
+# 創建 static files symlink（重要！否則 CSS/JS 會 404）
+cd .next/standalone/.next
+ln -sf ../../static static
+
+# 返回主目錄
+cd /opt/vcp-calculator
+
+# 創建 wrapper script 俾 frontend
+cat > /tmp/start-frontend.sh << 'EOFWRAPPER'
+#!/bin/bash
+export APP_PASSWORD='Yy442398!!'
+cd /opt/vcp-calculator/.next/standalone
+exec node server.js
+EOFWRAPPER
+chmod +x /tmp/start-frontend.sh
+
+# 啟動 backend
 screen -dmS app bash -c 'cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
-screen -S app -X screen -t frontend -md bash -c 'cd /opt/vcp-calculator/.next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash'
+
+sleep 3
+
+# 啟動 frontend
+screen -dmS frontend bash -c '/tmp/start-frontend.sh; exec bash'
+
+sleep 5
 
 # 驗證
 screen -ls
 curl -s -o /dev/null -w 'Frontend: %{http_code}\n' http://localhost:3000/
+curl -s http://localhost:8000/api/health
 ```
 
 ---
@@ -373,8 +433,11 @@ Backend: 8000
 代碼路徑: /opt/vcp-calculator
 
 Screen Sessions:
-- app: Position Calculator (backend + frontend)
+- app: Python Backend
+- frontend: Next.js Frontend
 - opend: 富途 OpenD
+
+API Key: vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
 ```
 
 ## 部署命令速查
@@ -387,7 +450,8 @@ ssh root@107.173.153.41
 screen -ls
 
 # === 進入 Screen 查看 ===
-screen -r app      # Position Calculator
+screen -r app      # Backend
+screen -r frontend # Frontend
 screen -r opend    # OpenD
 
 # === 退出 Screen ===
@@ -403,8 +467,27 @@ cd /opt/futuopend && ./FutuOpenD
 # Ctrl+A D 退出
 
 # === 重啟 Position Calculator ===
-screen -S app -X quit
-cd /opt/vcp-calculator
+# 停止舊服務
+screen -S app -X quit 2>/dev/null
+pkill -f 'node' 2>/dev/null
+
+# 創建 wrapper script
+cat > /tmp/start-frontend.sh << 'EOF'
+#!/bin/bash
+export APP_PASSWORD='Yy442398!!'
+cd /opt/vcp-calculator/.next/standalone
+exec node server.js
+EOF
+chmod +x /tmp/start-frontend.sh
+
+# 啟動 backend
 screen -dmS app bash -c 'cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
-screen -S app -X screen -t frontend -md bash -c 'cd /opt/vcp-calculator/.next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash'
+
+# 啟動 frontend
+screen -dmS frontend bash -c '/tmp/start-frontend.sh; exec bash'
+
+# === 完整更新流程 ===
+git pull origin main
+npm run build
+# 然後重啟如上
 ```

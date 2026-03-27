@@ -18,14 +18,15 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 停止舊的 app screen
-echo -e "${YELLOW}停止舊的 app screen...${NC}"
+# 停止舊的 screens
+echo -e "${YELLOW}停止舊的 screens...${NC}"
 screen -S app -X quit 2>/dev/null || true
+screen -S frontend -X quit 2>/dev/null || true
 sleep 1
 
 # 殺掉舊進程（確保乾淨）
 pkill -f "python3 backend/main.py" 2>/dev/null || true
-pkill -f "next-server" 2>/dev/null || true
+pkill -f "node" 2>/dev/null || true
 sleep 1
 
 echo -e "${GREEN}✓ 舊進程已清理${NC}"
@@ -56,6 +57,7 @@ if [ -f ".env" ]; then
 #!/bin/bash
 export APP_PASSWORD='${APP_PASSWORD}'
 export PYTHON_API_URL='${PYTHON_API_URL}'
+export API_SECRET='${API_SECRET}'
 cd ${SCRIPT_DIR}/.next/standalone
 exec node server.js
 EOFWRAPPER
@@ -63,35 +65,47 @@ EOFWRAPPER
     echo -e "${GREEN}✓ Frontend wrapper script 已創建${NC}"
 fi
 
-# 創建 app screen，包含 backend 和 frontend 兩個 window
-echo -e "${GREEN}創建 app screen...${NC}"
+# 確保 .next/standalone/.env 存在（下次重啟時 load）
+if [ -f ".env" ]; then
+    echo -e "${GREEN}更新 standalone .env...${NC}"
+    grep -E '^(APP_PASSWORD|PYTHON_API_URL|API_SECRET)=' .env > .next/standalone/.env
+fi
 
-# Window 1: Backend
+echo ""
+echo -e "${GREEN}啟動 Backend...${NC}"
+
+# Backend screen
 screen -dmS app bash -c "cd $SCRIPT_DIR && python3 backend/main.py; exec bash"
 
 # 等一下 backend 啟動
-sleep 2
+sleep 3
 
-# Window 2: Frontend (使用 wrapper script)
-screen -S app -X screen -t frontend bash -c '/tmp/start-frontend.sh; exec bash'
+echo -e "${GREEN}啟動 Frontend...${NC}"
+
+# Frontend screen (separate)
+screen -dmS frontend bash -c '/tmp/start-frontend.sh; exec bash'
 
 # 等一下
 sleep 3
 
 echo ""
 echo "=========================================="
-echo -e "${GREEN}  Screen 已創建！${NC}"
+echo -e "${GREEN}  所有服務已啟動！${NC}"
 echo "=========================================="
 echo ""
 echo "Screen 狀態:"
 screen -ls
 echo ""
-echo "查看 Position Calculator:"
+echo "查看 Position Calculator: http://107.173.153.41"
+echo ""
+echo "查看後端日誌:"
 echo "  screen -r app"
-echo "  - Ctrl+A n: 切換到下一個 window (frontend)"
-echo "  - Ctrl+A p: 切換到上一個 window (backend)"
-echo "  - Ctrl+A D: 退出 screen"
+echo ""
+echo "查看前端日誌:"
+echo "  screen -r frontend"
 echo ""
 echo "驗證服務:"
 echo "  curl -s -o /dev/null -w 'Frontend: %{http_code}\\n' http://localhost:3000/"
-echo "  ss -tlnp | grep -E ':8000|:3000'"
+echo "  curl -s http://localhost:8000/api/health"
+echo ""
+echo "退出 screen: Ctrl+A D"
