@@ -11,11 +11,12 @@ interface ChartProps {
     low: number
     close: number
   }[]
-  buyPrice?: number
+  direction?: 'LONG' | 'SHORT'  // 持倉方向
+  entryPrice?: number  // 改名：通用於 LONG/SHORT
   stopLoss?: number
   atr?: number | null
   atrMultiplier?: number
-  onBuyPriceChange?: (price: number) => void
+  onEntryPriceChange?: (price: number) => void  // 改名
   onStopLossChange?: (price: number) => void
 }
 
@@ -77,13 +78,14 @@ export default function CandlestickChart({
     ema20?: ISeriesApi<"Line">
     sma50?: ISeriesApi<"Line">
     sma200?: ISeriesApi<"Line">
-    buyLine?: ISeriesApi<"Line">
+    entryLine?: ISeriesApi<"Line">  // 改名：entryLine 通用於 LONG/SHORT
     stopLine?: ISeriesApi<"Line">
   }>({})
   
   // 用ref去store latest atr同atrMultiplier，等click handler可以access到最新值
   const atrRef = useRef(atr)
   const atrMultiplierRef = useRef(atrMultiplier)
+  const directionRef = useRef(direction)
   
   useEffect(() => {
     atrRef.current = atr
@@ -92,6 +94,10 @@ export default function CandlestickChart({
   useEffect(() => {
     atrMultiplierRef.current = atrMultiplier
   }, [atrMultiplier])
+  
+  useEffect(() => {
+    directionRef.current = direction
+  }, [direction])
 
   // Initialize chart
   useEffect(() => {
@@ -286,16 +292,23 @@ export default function CandlestickChart({
 
     // Add click handler
     chart.subscribeClick((param: MouseEventParams) => {
-      if (!param.point || !onBuyPriceChange || !candlestickSeriesRef.current) return;
+      if (!param.point || !onEntryPriceChange || !candlestickSeriesRef.current) return;
       
       const priceAtClick = candlestickSeriesRef.current.coordinateToPrice(param.point.y);
       
       if (priceAtClick !== null && !isNaN(priceAtClick)) {
-        onBuyPriceChange(priceAtClick);
+        onEntryPriceChange(priceAtClick);
         
         if (atrRef.current && onStopLossChange) {
-          const stopLossPrice = priceAtClick - (atrRef.current * atrMultiplierRef.current);
-          onStopLossChange(stopLossPrice);
+          if (directionRef.current === 'LONG') {
+            // Long: 止蝕喺下面
+            const stopLossPrice = priceAtClick - (atrRef.current * atrMultiplierRef.current);
+            onStopLossChange(stopLossPrice);
+          } else {
+            // Short: 止蝕喺上面
+            const stopLossPrice = priceAtClick + (atrRef.current * atrMultiplierRef.current);
+            onStopLossChange(stopLossPrice);
+          }
         }
       }
     })
@@ -319,34 +332,39 @@ export default function CandlestickChart({
     }
   }, [data])
 
-  // Update buy/stop lines
+  // Update entry/stop lines
   useEffect(() => {
     if (!chartRef.current || !data || data.length === 0) return
 
-    if (seriesRef.current.buyLine) {
-      try { chartRef.current.removeSeries(seriesRef.current.buyLine) } catch (e) {}
-      seriesRef.current.buyLine = undefined
+    // Remove old entry line
+    if (seriesRef.current.entryLine) {
+      try { chartRef.current.removeSeries(seriesRef.current.entryLine) } catch (e) {}
+      seriesRef.current.entryLine = undefined
     }
+    // Remove old stop line
     if (seriesRef.current.stopLine) {
       try { chartRef.current.removeSeries(seriesRef.current.stopLine) } catch (e) {}
       seriesRef.current.stopLine = undefined
     }
 
-    if (buyPrice) {
-      const buyLine = chartRef.current.addSeries(LineSeries, {
-        color: '#00ffff',
+    // Entry line color based on direction
+    const entryColor = direction === 'SHORT' ? '#ff4d4d' : '#00ffff'
+    
+    if (entryPrice) {
+      const entryLine = chartRef.current.addSeries(LineSeries, {
+        color: entryColor,
         lineWidth: 2,
         lineStyle: 2,
         priceLineVisible: false,
         lastValueVisible: false,
       })
-      buyLine.setData(data.map(d => ({ time: d.time as any, value: buyPrice })))
-      seriesRef.current.buyLine = buyLine
+      entryLine.setData(data.map(d => ({ time: d.time as any, value: entryPrice })))
+      seriesRef.current.entryLine = entryLine
     }
 
     if (stopLoss) {
       const stopLine = chartRef.current.addSeries(LineSeries, {
-        color: '#ff4d4d',
+        color: '#ffaa00',
         lineWidth: 2,
         lineStyle: 2,
         priceLineVisible: false,
@@ -355,7 +373,7 @@ export default function CandlestickChart({
       stopLine.setData(data.map(d => ({ time: d.time as any, value: stopLoss })))
       seriesRef.current.stopLine = stopLine
     }
-  }, [buyPrice, stopLoss, data])
+  }, [entryPrice, stopLoss, direction, data])
 
   return <div ref={chartContainerRef} className="w-full h-[300px]" />
 }

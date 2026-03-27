@@ -306,11 +306,15 @@ def _place_stop_order(
     stop_loss_price: float,
     acc_id: int,
     trd_env: str,
-    trade_pwd: str = ""
+    trade_pwd: str = "",
+    direction: str = "LONG"  # 新增：LONG 或 SHORT
 ) -> Dict:
     """
     觸發並落STOP止損單.
     只會喺Entry Order完全成交或部分成交後先會調用呢個function.
+    
+    - LONG: SELL STOP (跌到止蝕價止蝕)
+    - SHORT: BUY STOP (升到止蝕價止蝕)
     """
     try:
         import futu
@@ -318,7 +322,8 @@ def _place_stop_order(
         raise ImportError("futu-api not installed. Run: pip install futu-api")
     
     futu_code = _to_futu_code(symbol)
-    print(f"[StopMonitor] Triggering STOP order: SELL {quantity} {symbol} @ ${stop_loss_price}")
+    side_str = "BUY" if direction == "SHORT" else "SELL"
+    print(f"[StopMonitor] Triggering STOP order: {side_str} {quantity} {symbol} @ ${stop_loss_price} (direction={direction})")
     
     # Determine market
     if futu_code.startswith("HK."):
@@ -337,12 +342,15 @@ def _place_stop_order(
         
         trd_env_enum = futu.TrdEnv.SIMULATE if trd_env.upper() == "SIMULATE" else futu.TrdEnv.REAL
         
+        # 止損單方向
+        trd_side = futu.TrdSide.BUY if direction == "SHORT" else futu.TrdSide.SELL
+        
         # Place STOP order
         ret, data = ctx.place_order(
             price=0,  # STOP orders don't use price, use aux_price as trigger
             qty=quantity,
             code=futu_code,
-            trd_side=futu.TrdSide.SELL,
+            trd_side=trd_side,
             order_type=futu.OrderType.STOP,
             trd_env=trd_env_enum,
             acc_id=acc_id,
@@ -361,7 +369,7 @@ def _place_stop_order(
         return {
             "success": True,
             "stop_order_id": stop_order_id,
-            "message": f"STOP order placed: SELL {quantity} @ ${stop_loss_price}"
+            "message": f"STOP order placed: {side_str} {quantity} @ ${stop_loss_price}"
         }
     finally:
         ctx.close()
@@ -449,6 +457,7 @@ def _monitor_loop(host: str, port: int, check_interval: float = 2.0):
                                     acc_id=acc_id,
                                     trd_env=trd_env,
                                     trade_pwd=trade_pwd,
+                                    direction=order_info.get("direction", "LONG"),  # 傳入方向
                                 )
                                 
                                 if result.get("success"):
@@ -792,10 +801,13 @@ def _place_order(
         if data is not None and not data.empty:
             order_id = str(data.iloc[0].get("order_id", ""))
 
-        # If stop_loss_price is provided and this is a BUY order,
+        # If stop_loss_price is provided,
         # add to pending list for background monitor to trigger after FILLED
-        if stop_loss_price and side.upper() == "BUY" and order_id:
-            print(f"[Order] Adding stop loss to pending queue: order_id={order_id}, stop_price=${stop_loss_price}")
+        if stop_loss_price and order_id:
+            print(f"[Order] Adding stop loss to pending queue: order_id={order_id}, stop_price=${stop_loss_price}, side={side}")
+            
+            # Determine direction from side
+            order_direction = "SHORT" if side.upper() == "SELL" else "LONG"
             
             # Add to pending stop orders - background monitor will trigger when entry order FILLED
             _add_pending_stop_order(
@@ -807,13 +819,14 @@ def _place_order(
                     "futu_code": futu_code,
                     "acc_id": acc_id,
                     "trd_env": trd_env,
+                    "direction": order_direction,  # 保存方向
                 }
             )
             
             return {
                 "order_id": order_id,
                 "status": "submitted_pending_stop",
-                "message": f"Entry order submitted ({side} {quantity} {symbol} @ ${price}). Stop loss order (SELL {quantity} @ ${stop_loss_price}) will be triggered automatically when entry order is FILLED.",
+                "message": f"Entry order submitted ({side} {quantity} {symbol} @ ${price}). Stop loss order ({'BUY' if side.upper() == 'SELL' else 'SELL'} {quantity} @ ${stop_loss_price}) will be triggered automatically when entry order is FILLED.",
             }
         
         return {

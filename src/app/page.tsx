@@ -26,8 +26,9 @@ import DataSourceControl from '@/components/DataSourceControl'
 interface Position {
   id: string
   ticker: string
-  buyPrice: number
-  stopLoss: number
+  direction: 'LONG' | 'SHORT'  // 新增：持倉方向
+  buyPrice: number  // Long: 買入價, Short: 賣出價 (做空價)
+  stopLoss: number  // Long: 止蝕喺下面, Short: 止蝕喺上面
   shares: number
   positionValue: number
   portfolioPercent: number
@@ -44,10 +45,12 @@ interface Settings {
 // Data source switcher component
 // R-multiples visualization
 function RMultiplierBar({ 
+  direction,
   currentPrice, 
   entryPrice, 
   stopLoss
 }: { 
+  direction: 'LONG' | 'SHORT'
   currentPrice: number
   entryPrice: number
   stopLoss: number
@@ -59,15 +62,32 @@ function RMultiplierBar({
     return null
   }
   
-  const stopDistance = entryPrice - stopLoss
-  if (stopDistance <= 0) return null // 止蝕應該低於買入價
+  const stopDistance = direction === 'LONG' 
+    ? entryPrice - stopLoss  // Long: 止蝕喺下面
+    : stopLoss - entryPrice   // Short: 止蝕喺上面
   
-  const r1 = entryPrice + stopDistance
-  const r2 = entryPrice + (stopDistance * 2)
-  const r3 = entryPrice + (stopDistance * 3)
+  if (stopDistance <= 0) return null // 止蝕距離應該係正數
   
-  const min = stopLoss * 0.95
-  const max = r3 * 1.05
+  // 根據方向計算目標價
+  const r1 = direction === 'LONG' 
+    ? entryPrice + stopDistance 
+    : entryPrice - stopDistance
+  const r2 = direction === 'LONG' 
+    ? entryPrice + (stopDistance * 2) 
+    : entryPrice - (stopDistance * 2)
+  const r3 = direction === 'LONG' 
+    ? entryPrice + (stopDistance * 3) 
+    : entryPrice - (stopDistance * 3)
+  
+  // 計算顯示範圍
+  let min, max
+  if (direction === 'LONG') {
+    min = stopLoss * 0.95
+    max = r3 * 1.05
+  } else {
+    min = r3 * 0.95
+    max = stopLoss * 1.05
+  }
   const range = max - min
   
   const getPosition = (price: number) => ((price - min) / range) * 100
@@ -85,7 +105,7 @@ function RMultiplierBar({
         {/* Entry Price - Cyan */}
         <div className="absolute top-0 bottom-0 w-0.5 bg-cyan-400 group cursor-pointer" style={{ left: `${getPosition(entryPrice)}%` }}>
           <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-cyan-400 text-black text-xs px-1 py-0.5 rounded whitespace-nowrap z-20">
-            買入: ${entryPrice.toFixed(2)}
+            {direction === 'LONG' ? '買入' : '賣出'}: ${entryPrice.toFixed(2)}
           </div>
         </div>
         
@@ -120,7 +140,7 @@ function RMultiplierBar({
       
       <div className="flex justify-between text-xs text-muted-foreground mt-1" style={{ position: 'relative', height: '20px' }}>
         <span className="text-loss absolute transform -translate-x-1/2" style={{ left: `${getPosition(stopLoss)}%` }}>SL: ${stopLoss.toFixed(2)}</span>
-        <span className="text-cyan-400 absolute transform -translate-x-1/2" style={{ left: `${getPosition(entryPrice)}%` }}>買入: ${entryPrice.toFixed(2)}</span>
+        <span className="text-cyan-400 absolute transform -translate-x-1/2" style={{ left: `${getPosition(entryPrice)}%` }}>{direction === 'LONG' ? '買入' : '賣出'}: ${entryPrice.toFixed(2)}</span>
         <span className="text-profit/50 absolute transform -translate-x-1/2" style={{ left: `${getPosition(r1)}%` }}>R1: ${r1.toFixed(2)}</span>
         <span className="text-profit/70 absolute transform -translate-x-1/2" style={{ left: `${getPosition(r2)}%` }}>R2: ${r2.toFixed(2)}</span>
         <span className="text-profit absolute transform -translate-x-1/2" style={{ left: `${getPosition(r3)}%` }}>R3: ${r3.toFixed(2)}</span>
@@ -458,7 +478,8 @@ export default function Home() {
   }, [settings, hydrated])
   
   const [ticker, setTicker] = useState('')
-  const [buyPoint, setBuyPoint] = useState('')
+  const [direction, setDirection] = useState<'LONG' | 'SHORT'>('LONG')  // 持倉方向
+  const [entryPrice, setEntryPrice] = useState('')  // 改名：entryPrice 通用於 LONG/SHORT
   const [stopLoss, setStopLoss] = useState('')
   const [quoteData, setQuoteData] = useState<QuoteData | null>(null)
   const [atr, setAtr] = useState<number | null>(null)
@@ -533,15 +554,22 @@ export default function Home() {
     fetchEnvStatus()
   }, [])
   
-  // Handle chart click - set buy price and auto-calculate stop loss
+  // Handle chart click - set entry price and auto-calculate stop loss
   const handleChartClick = useCallback((price: number) => {
-    setBuyPoint(price.toFixed(2))
-    // Auto calculate stop loss based on ATR
+    setEntryPrice(price.toFixed(2))
+    // Auto calculate stop loss based on ATR and direction
     if (atr) {
-      const stopLossPrice = price - atr * settings.atrMultiplier
-      setStopLoss(stopLossPrice.toFixed(2))
+      if (direction === 'LONG') {
+        // Long: 止蝕喺下面
+        const stopLossPrice = price - atr * settings.atrMultiplier
+        setStopLoss(stopLossPrice.toFixed(2))
+      } else {
+        // Short: 止蝕喺上面
+        const stopLossPrice = price + atr * settings.atrMultiplier
+        setStopLoss(stopLossPrice.toFixed(2))
+      }
     }
-  }, [atr, settings.atrMultiplier])
+  }, [atr, settings.atrMultiplier, direction])
   
   // Initialize API connection
   useEffect(() => {
@@ -579,8 +607,8 @@ export default function Home() {
       if (ticker.length >= 1) {
         setLoading(true)
         
-        // Reset buy price and stop loss when ticker changes
-        setBuyPoint('')
+        // Reset entry price and stop loss when ticker changes
+        setEntryPrice('')
         setStopLoss('')
         
         try {
@@ -633,19 +661,33 @@ export default function Home() {
   }, [ticker, dataSource])
   
   // Calculations（避免 NaN：空字串當 0）
-  const buyNum = parseFloat(buyPoint) || 0
+  const entryNum = parseFloat(entryPrice) || 0
   const stopNum = parseFloat(stopLoss) || 0
   const riskAmount = settings.accountSize * (settings.defaultRiskPercent / 100)
-  const stopDistance = buyNum - stopNum
-  const sharesToBuy = stopDistance > 0 ? Math.floor(riskAmount / stopDistance) : 0
-  const positionValue = sharesToBuy * buyNum
-  const portfolioPercent = settings.accountSize > 0 ? (positionValue / settings.accountSize) * 100 : 0
-  const stopLossPercent = buyNum > 0 ? (stopDistance / buyNum) * 100 : 0
   
-  // Suggested stop loss from ATR - based on buy price if available, otherwise last price
-  const basePrice = parseFloat(buyPoint) || quoteData?.lastPrice || 0
+  // 根據方向計算止蝕距離
+  let stopDistance = 0
+  let shares = 0
+  if (direction === 'LONG') {
+    // Long: 止蝕喺 entry 下面
+    stopDistance = entryNum - stopNum
+    shares = stopDistance > 0 ? Math.floor(riskAmount / stopDistance) : 0
+  } else {
+    // Short: 止蝕喺 entry 上面
+    stopDistance = stopNum - entryNum
+    shares = stopDistance > 0 ? Math.floor(riskAmount / stopDistance) : 0
+  }
+  
+  const positionValue = shares * entryNum
+  const portfolioPercent = settings.accountSize > 0 ? (positionValue / settings.accountSize) * 100 : 0
+  const stopLossPercent = entryNum > 0 ? (stopDistance / entryNum) * 100 : 0
+  
+  // Suggested stop loss from ATR - based on entry price if available, otherwise last price
+  const basePrice = parseFloat(entryPrice) || quoteData?.lastPrice || 0
   const suggestedStopLoss = (atr && basePrice) 
-    ? basePrice - (atr * settings.atrMultiplier)
+    ? direction === 'LONG'
+      ? basePrice - (atr * settings.atrMultiplier)  // Long: 止蝕喺下面
+      : basePrice + (atr * settings.atrMultiplier)  // Short: 止蝕喺上面
     : null
   
   // Warnings
@@ -659,13 +701,14 @@ export default function Home() {
   }
   
   const savePosition = () => {
-    if (sharesToBuy > 0 && ticker && buyPoint && stopLoss) {
+    if (shares > 0 && ticker && entryPrice && stopLoss) {
       const newPosition: Position = {
         id: Date.now().toString(),
         ticker: ticker.toUpperCase(),
-        buyPrice: parseFloat(buyPoint),
+        direction: direction,
+        buyPrice: parseFloat(entryPrice),
         stopLoss: parseFloat(stopLoss),
-        shares: sharesToBuy,
+        shares: shares,
         positionValue,
         portfolioPercent,
         riskPercent: settings.defaultRiskPercent,
@@ -722,7 +765,7 @@ export default function Home() {
   
   // Place order function
   const handlePlaceOrder = useCallback(async () => {
-    if (!ticker || !buyPoint || sharesToBuy <= 0) return
+    if (!ticker || !entryPrice || shares <= 0) return
 
     setOrdering(true)
     setOrderResult(null)
@@ -730,10 +773,10 @@ export default function Home() {
     try {
       const response = await placeOrder({
         symbol: ticker.toUpperCase(),
-        price: parseFloat(buyPoint),
-        quantity: sharesToBuy,
+        price: parseFloat(entryPrice),
+        quantity: shares,
         order_type: 'LIMIT',
-        side: 'BUY',
+        side: direction === 'LONG' ? 'BUY' : 'SELL',
         stop_loss_price: stopLoss ? parseFloat(stopLoss) : undefined,
       })
 
@@ -757,7 +800,7 @@ export default function Home() {
     }
     
     setOrdering(false)
-  }, [ticker, buyPoint, sharesToBuy, syncBrokerPositions])
+  }, [ticker, entryPrice, shares, direction, stopLoss, syncBrokerPositions])
   
   // Handle environment switch
   const handleEnvSwitch = useCallback(async (newEnv: 'SIMULATE' | 'REAL') => {
@@ -1037,43 +1080,43 @@ export default function Home() {
                   </div>
                 </div>
                 
-                {/* Moving Averages */}
+                    {/* Moving Averages */}
                 <div className="mt-4 pt-4 border-t border-border">
                   <div className="flex gap-4 text-sm flex-wrap">
                     <div>
                       <span className="text-muted-foreground">EMA10: </span>
                       <button 
                         type="button"
-                        onClick={() => { const v = quoteData.ema10; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.ema10; if (v != null) { setEntryPrice(v.toFixed(2)); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * settings.atrMultiplier).toFixed(2) : (v + atr * settings.atrMultiplier).toFixed(2)); } }}
                         className="font-mono text-cyan-400 hover:underline cursor-pointer"
-                        title="Set as buy price with ATR stop"
+                        title="Set as entry price with ATR stop"
                       >${quoteData.ema10?.toFixed(2) || 'N/A'}</button>
                     </div>
                     <div>
                       <span className="text-muted-foreground">EMA20: </span>
                       <button 
                         type="button"
-                        onClick={() => { const v = quoteData.ema20; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.ema20; if (v != null) { setEntryPrice(v.toFixed(2)); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * settings.atrMultiplier).toFixed(2) : (v + atr * settings.atrMultiplier).toFixed(2)); } }}
                         className="font-mono text-orange-400 hover:underline cursor-pointer"
-                        title="Set as buy price with ATR stop"
+                        title="Set as entry price with ATR stop"
                       >${quoteData.ema20?.toFixed(2) || 'N/A'}</button>
                     </div>
                     <div>
                       <span className="text-muted-foreground">SMA50: </span>
                       <button 
                         type="button"
-                        onClick={() => { const v = quoteData.sma50; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.sma50; if (v != null) { setEntryPrice(v.toFixed(2)); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * settings.atrMultiplier).toFixed(2) : (v + atr * settings.atrMultiplier).toFixed(2)); } }}
                         className="font-mono text-blue-400 hover:underline cursor-pointer"
-                        title="Set as buy price with ATR stop"
+                        title="Set as entry price with ATR stop"
                       >${quoteData.sma50?.toFixed(2) || 'N/A'}</button>
                     </div>
                     <div>
                       <span className="text-muted-foreground">SMA200: </span>
                       <button 
                         type="button"
-                        onClick={() => { const v = quoteData.sma200; if (v != null) { setBuyPoint(v.toFixed(2)); if (atr) setStopLoss((v - atr * settings.atrMultiplier).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.sma200; if (v != null) { setEntryPrice(v.toFixed(2)); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * settings.atrMultiplier).toFixed(2) : (v + atr * settings.atrMultiplier).toFixed(2)); } }}
                         className="font-mono text-purple-400 hover:underline cursor-pointer"
-                        title="Set as buy price with ATR stop"
+                        title="Set as entry price with ATR stop"
                       >${quoteData.sma200?.toFixed(2) || 'N/A'}</button>
                     </div>
                   </div>
@@ -1085,11 +1128,12 @@ export default function Home() {
                     <h4 className="text-sm text-muted-foreground mb-2">價格圖表</h4>
                     <CandlestickChart 
                       data={historicalData} 
-                      buyPrice={buyPoint ? parseFloat(buyPoint) : undefined}
+                      direction={direction}
+                      entryPrice={entryPrice ? parseFloat(entryPrice) : undefined}
                       stopLoss={stopLoss ? parseFloat(stopLoss) : undefined}
                       atr={atr}
                       atrMultiplier={settings.atrMultiplier}
-                      onBuyPriceChange={handleChartClick}
+                      onEntryPriceChange={handleChartClick}
                       onStopLossChange={(price) => setStopLoss(price.toFixed(2))}
                     />
                   </div>
@@ -1100,6 +1144,48 @@ export default function Home() {
             {/* Input Form */}
             <div className="bg-card border border-border rounded-xl p-6 space-y-4">
               <h3 className="text-lg font-semibold mb-4">倉位設定</h3>
+              
+              {/* LONG/SHORT Toggle */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDirection('LONG')
+                    // 切換方向時重新計算止蝕
+                    if (atr && entryPrice) {
+                      const price = parseFloat(entryPrice)
+                      setStopLoss((price - atr * settings.atrMultiplier).toFixed(2))
+                    }
+                  }}
+                  className={`flex-1 py-3 rounded-lg font-medium transition-all cursor-pointer ${
+                    direction === 'LONG'
+                      ? 'bg-profit text-black shadow-lg'
+                      : 'bg-secondary text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <TrendingUp className="w-5 h-5 mx-auto mb-1" />
+                  Long (做多)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDirection('SHORT')
+                    // 切換方向時重新計算止蝕
+                    if (atr && entryPrice) {
+                      const price = parseFloat(entryPrice)
+                      setStopLoss((price + atr * settings.atrMultiplier).toFixed(2))
+                    }
+                  }}
+                  className={`flex-1 py-3 rounded-lg font-medium transition-all cursor-pointer ${
+                    direction === 'SHORT'
+                      ? 'bg-loss text-white shadow-lg'
+                      : 'bg-secondary text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <TrendingDown className="w-5 h-5 mx-auto mb-1" />
+                  Short (做空)
+                </button>
+              </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1115,13 +1201,13 @@ export default function Home() {
                 
                 <div className="flex gap-3">
                   <div className="flex-1">
-                    <label className="text-sm text-muted-foreground">買入價 ($)</label>
+                    <label className="text-sm text-muted-foreground">{direction === 'LONG' ? '買入價 ($)' : '賣出價 ($)'}</label>
                     <input
                       type="number"
                       step="0.01"
-                      value={buyPoint}
-                      onChange={(e) => setBuyPoint(e.target.value)}
-                      placeholder="買入價"
+                      value={entryPrice}
+                      onChange={(e) => setEntryPrice(e.target.value)}
+                      placeholder={direction === 'LONG' ? '買入價' : '賣出價'}
                       className="w-full mt-1 px-4 py-3 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-lg font-mono"
                     />
                   </div>
@@ -1153,6 +1239,7 @@ export default function Home() {
                   {suggestedStopLoss && (
                     <p className="text-xs text-muted-foreground mt-1">
                       建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
+                      {direction === 'SHORT' && <span className="text-loss ml-2">(止蝕喺上面)</span>}
                     </p>
                   )}
               </div>
@@ -1167,6 +1254,12 @@ export default function Home() {
                   <span className="text-muted-foreground">止蝕空間:</span>
                   <span className={`font-mono ${stopDistance > 0 ? 'text-loss' : 'text-muted-foreground'}`}>
                     ${stopDistance.toFixed(2)} ({stopLossPercent.toFixed(2)}%)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-sm mt-2">
+                  <span className="text-muted-foreground">方向:</span>
+                  <span className={`font-mono ${direction === 'LONG' ? 'text-profit' : 'text-loss'}`}>
+                    {direction === 'LONG' ? 'Long (做多)' : 'Short (做空)'}
                   </span>
                 </div>
               </div>
@@ -1187,12 +1280,13 @@ export default function Home() {
               )}
               
               {/* R/R Visualization */}
-              {buyPoint && stopLoss && quoteData && (
+              {entryPrice && stopLoss && quoteData && (
                 <div className="mt-6">
                   <h4 className="text-sm text-muted-foreground mb-2">R倍數可視化</h4>
                   <RMultiplierBar 
+                    direction={direction}
                     currentPrice={quoteData.lastPrice || 0}
-                    entryPrice={parseFloat(buyPoint)}
+                    entryPrice={parseFloat(entryPrice)}
                     stopLoss={parseFloat(stopLoss)}
                   />
                 </div>
@@ -1204,8 +1298,8 @@ export default function Home() {
           <div className="space-y-6 flex flex-col h-full">
             {/* Main Result */}
             <div className="bg-card border border-border rounded-xl p-6 text-center">
-              <p className="text-muted-foreground mb-2">應買股數</p>
-              <p className="text-6xl font-bold text-primary glow-green">{sharesToBuy.toLocaleString()}</p>
+              <p className="text-muted-foreground mb-2">{direction === 'LONG' ? '應買股數' : '應借入股數'}</p>
+              <p className="text-6xl font-bold text-primary glow-green">{shares.toLocaleString()}</p>
               <p className="text-muted-foreground mt-4">總持倉價值</p>
               <p className="text-2xl font-mono">${positionValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
               <p className={`text-lg mt-2 ${portfolioPercent > 20 ? 'text-loss' : 'text-muted-foreground'}`}>
@@ -1216,19 +1310,25 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setShowOrderConfirm(true)}
-                  disabled={sharesToBuy <= 0}
+                  disabled={shares <= 0}
                   className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg hover:bg-opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer ${
-                    tradeEnv === 'REAL' 
-                      ? 'bg-red-500 text-white' 
-                      : 'bg-profit text-black'
+                    direction === 'SHORT'
+                      ? 'bg-loss text-white'
+                      : tradeEnv === 'REAL' 
+                        ? 'bg-red-500 text-white' 
+                        : 'bg-profit text-black'
                   }`}
                 >
-                  <TrendingUp className="w-4 h-4" />
+                  {direction === 'LONG' ? (
+                    <TrendingUp className="w-4 h-4" />
+                  ) : (
+                    <TrendingDown className="w-4 h-4" />
+                  )}
                   {tradeEnv === 'REAL' ? '一鍵落單 (真金白銀)' : '一鍵落單 (模擬)'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setTicker(''); setBuyPoint(''); setStopLoss(''); setQuoteData(null); setAtr(null); setHistoricalData([]); }}
+                  onClick={() => { setTicker(''); setEntryPrice(''); setStopLoss(''); setQuoteData(null); setAtr(null); setHistoricalData([]); setDirection('LONG'); }}
                   className="px-4 py-3 bg-secondary border border-border rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
@@ -1237,28 +1337,47 @@ export default function Home() {
             </div>
             
             {/* Targets */}
-            {buyPoint && stopLoss && (
+            {entryPrice && stopLoss && (
               <div className="bg-card border border-border rounded-xl p-6">
                 <h3 className="text-lg font-semibold mb-4">目標價位</h3>
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">買入價</span>
-                    <span className="font-mono text-primary">${parseFloat(buyPoint).toFixed(2)}</span>
+                    <span className="text-muted-foreground">{direction === 'LONG' ? '買入價' : '賣出價'}</span>
+                    <span className={`font-mono ${direction === 'LONG' ? 'text-primary' : 'text-loss'}`}>${parseFloat(entryPrice).toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">1R 目標</span>
-                    <span className="font-mono text-profit">${(parseFloat(buyPoint) + stopDistance).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">2R 目標</span>
-                    <span className="font-mono text-profit">${(parseFloat(buyPoint) + stopDistance * 2).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">3R 目標</span>
-                    <span className="font-mono text-profit">${(parseFloat(buyPoint) + stopDistance * 3).toFixed(2)}</span>
-                  </div>
+                  {direction === 'LONG' ? (
+                    <>
+                      <div className="flex justify-between items-center">
+                        <span className="text-muted-foreground">1R 目標</span>
+                        <span className="font-mono text-profit">${(parseFloat(entryPrice) + stopDistance).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-muted-foreground">2R 目標</span>
+                        <span className="font-mono text-profit">${(parseFloat(entryPrice) + stopDistance * 2).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-muted-foreground">3R 目標</span>
+                        <span className="font-mono text-profit">${(parseFloat(entryPrice) + stopDistance * 3).toFixed(2)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex justify-between items-center">
+                        <span className="text-muted-foreground">1R 目標</span>
+                        <span className="font-mono text-loss">${(parseFloat(entryPrice) - stopDistance).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-muted-foreground">2R 目標</span>
+                        <span className="font-mono text-loss">${(parseFloat(entryPrice) - stopDistance * 2).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-muted-foreground">3R 目標</span>
+                        <span className="font-mono text-loss">${(parseFloat(entryPrice) - stopDistance * 3).toFixed(2)}</span>
+                      </div>
+                    </>
+                  )}
                   <div className="border-t border-border pt-3 mt-3 flex justify-between items-center">
-                    <span className="text-loss">止蝕位</span>
+                    <span className="text-warning">止蝕位</span>
                     <span className="font-mono text-loss">${parseFloat(stopLoss).toFixed(2)}</span>
                   </div>
                 </div>
@@ -1393,8 +1512,17 @@ export default function Home() {
               /* Order Confirmation */
               <>
                 <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                  <TrendingUp className="w-6 h-6 text-profit" />
-                  確認落單
+                  {direction === 'LONG' ? (
+                    <>
+                      <TrendingUp className="w-6 h-6 text-profit" />
+                      <span>確認買入 (Long)</span>
+                    </>
+                  ) : (
+                    <>
+                      <TrendingDown className="w-6 h-6 text-loss" />
+                      <span>確認借入 (Short)</span>
+                    </>
+                  )}
                 </h3>
                 
                 <div className="bg-secondary/50 rounded-lg p-4 mb-6">
@@ -1403,36 +1531,44 @@ export default function Home() {
                     <span className="font-bold">{ticker.toUpperCase()}</span>
                   </div>
                   <div className="flex justify-between mb-2">
-                    <span className="text-muted-foreground">買入價:</span>
-                    <span className="font-mono">${parseFloat(buyPoint).toFixed(2)}</span>
+                    <span className="text-muted-foreground">{direction === 'LONG' ? '買入價:' : '賣出價:'}</span>
+                    <span className="font-mono">${parseFloat(entryPrice).toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between mb-2">
                     <span className="text-muted-foreground">股數:</span>
-                    <span className="font-mono text-profit">{sharesToBuy.toLocaleString()}</span>
+                    <span className={`font-mono ${direction === 'LONG' ? 'text-profit' : 'text-loss'}`}>{shares.toLocaleString()}</span>
                   </div>
                   {stopLoss && (
                   <>
                     <div className="flex justify-between mb-2">
                       <span className="text-muted-foreground">止蝕位:</span>
-                      <span className="font-mono text-loss">${parseFloat(stopLoss).toFixed(2)}</span>
+                      <span className="font-mono text-warning">${parseFloat(stopLoss).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between mb-2">
-                      <span className="text-muted-foreground">止蝕單:</span>
-                      <span className="font-mono text-warning">成交後自動觸發</span>
+                      <span className="text-muted-foreground">止蝕觸發:</span>
+                      <span className="font-mono text-warning">
+                        {direction === 'LONG' 
+                          ? `SELL ${shares} @ $${parseFloat(stopLoss).toFixed(2)}` 
+                          : `BUY ${shares} @ $${parseFloat(stopLoss).toFixed(2)}`
+                        }
+                      </span>
                     </div>
                   </>
                 )}
                   <div className="border-t border-border pt-2 mt-2 flex justify-between">
                     <span className="text-muted-foreground">總額:</span>
-                    <span className="font-bold">${(sharesToBuy * parseFloat(buyPoint)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                    <span className="font-bold">${(shares * parseFloat(entryPrice)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                   </div>
                 </div>
 
                 {stopLoss && (
-                  <div className="bg-profit/20 border border-profit rounded-lg p-3 mb-6">
-                    <p className="text-sm text-profit flex items-center gap-2">
+                  <div className={`${direction === 'LONG' ? 'bg-profit/20 border-profit' : 'bg-loss/20 border-loss'} border rounded-lg p-3 mb-6`}>
+                    <p className={`text-sm flex items-center gap-2 ${direction === 'LONG' ? 'text-profit' : 'text-loss'}`}>
                       <AlertTriangle className="w-4 h-4" />
-                      當買入單成交後，將自動觸發止蝕單 (SELL {sharesToBuy} @ ${parseFloat(stopLoss).toFixed(2)})
+                      {direction === 'LONG' 
+                        ? `當買入單成交後，將自動觸發止蝕單 (SELL ${shares} @ $${parseFloat(stopLoss).toFixed(2)})`
+                        : `當借入單成交後，將自動觸發止蝕單 (BUY ${shares} @ $${parseFloat(stopLoss).toFixed(2)})`
+                      }
                     </p>
                   </div>
                 )}
