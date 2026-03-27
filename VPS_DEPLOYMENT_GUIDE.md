@@ -290,6 +290,76 @@ tail -f /tmp/position-calculator-backend.log
 tail -f /tmp/position-calculator-frontend.log
 ```
 
+## VPS Screen 管理
+
+### Screen 結構
+
+| Screen 名 | 用途 | 狀態 |
+|-----------|------|------|
+| `app` | Position Calculator (Backend + Frontend) | 必運行 |
+| `opend` | 富途 OpenD | 必運行 |
+
+### 常用命令
+
+```bash
+# 查看所有 screen
+screen -ls
+
+# 進入 app screen（查看/調試）
+screen -r app
+# 切換 window: Ctrl+A n (下一個) / Ctrl+A p (上一個)
+# 退出 screen: Ctrl+A D
+
+# 進入 opend screen（查看 OpenD 狀態）
+screen -r opend
+# 退出 screen: Ctrl+A D
+```
+
+### 重啟 Position Calculator
+
+```bash
+# 進入 VPS
+ssh root@107.173.153.41
+
+# 停止舊的 app screen
+screen -S app -X quit
+
+# 重建 app screen（backend + frontend）
+cd /opt/vcp-calculator
+
+# 創建新 screen，包含 backend 和 frontend 兩個 window
+screen -dmS app bash -c 'echo "Starting backend..."; cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
+screen -S app -X screen -t frontend -md bash -c 'echo "Starting frontend..."; cd /opt/vcp-calculator/.next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash'
+
+# 確認狀態
+screen -ls
+```
+
+### 更新代碼後重啟（重新 Build）
+
+```bash
+ssh root@107.173.153.41
+
+cd /opt/vcp-calculator
+
+# 停止舊服務
+screen -S app -X quit
+
+# Pull 最新代碼
+git pull
+
+# 重新 Build
+npm run build
+
+# 重啟服務
+screen -dmS app bash -c 'cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
+screen -S app -X screen -t frontend -md bash -c 'cd /opt/vcp-calculator/.next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash'
+
+# 驗證
+screen -ls
+curl -s -o /dev/null -w 'Frontend: %{http_code}\n' http://localhost:3000/
+```
+
 ---
 
 ## VPS 信息
@@ -303,11 +373,8 @@ Backend: 8000
 代碼路徑: /opt/vcp-calculator
 
 Screen Sessions:
-- opend: 富途 OpenD（必須運行）
-
-日誌路徑:
-- /tmp/position-calculator-backend.log
-- /tmp/position-calculator-frontend.log
+- app: Position Calculator (backend + frontend)
+- opend: 富途 OpenD
 ```
 
 ## 部署命令速查
@@ -316,13 +383,15 @@ Screen Sessions:
 # SSH 進入 VPS
 ssh root@107.173.153.41
 
-# === 一鍵啟動（推薦）===
-cd /opt/vcp-calculator
-./start-vps.sh
+# === 查看 Screen ===
+screen -ls
 
-# === 一鍵停止 ===
-cd /opt/vcp-calculator
-./stop-vps.sh
+# === 進入 Screen 查看 ===
+screen -r app      # Position Calculator
+screen -r opend    # OpenD
+
+# === 退出 Screen ===
+# 在 screen 內按 Ctrl+A D
 
 # === OpenD 管理 ===
 # 確認 OpenD 運行
@@ -333,7 +402,9 @@ screen -S opend
 cd /opt/futuopend && ./FutuOpenD
 # Ctrl+A D 退出
 
-# 查看 OpenD 終端
-screen -r opend
-# Ctrl+A D 退出
+# === 重啟 Position Calculator ===
+screen -S app -X quit
+cd /opt/vcp-calculator
+screen -dmS app bash -c 'cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
+screen -S app -X screen -t frontend -md bash -c 'cd /opt/vcp-calculator/.next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash'
 ```

@@ -1,7 +1,6 @@
 #!/bin/bash
-# VPS 啟動腳本 - 適用於 VPS 部署
+# VPS 啟動腳本 - 使用 Screen 管理
 # 使用方法: ./start-vps.sh
-# 日誌位置: /tmp/position-calculator-{backend,frontend}.log
 
 set -e
 
@@ -19,77 +18,54 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 殺掉舊進程
-echo -e "${YELLOW}殺掉舊進程...${NC}"
-pkill -f "python backend/main.py" 2>/dev/null || true
-pkill -f "next dev" 2>/dev/null || true
+# 停止舊的 app screen
+echo -e "${YELLOW}停止舊的 app screen...${NC}"
+screen -S app -X quit 2>/dev/null || true
+sleep 1
+
+# 殺掉舊進程（確保乾淨）
+pkill -f "python3 backend/main.py" 2>/dev/null || true
 pkill -f "next-server" 2>/dev/null || true
+sleep 1
+
+echo -e "${GREEN}✓ 舊進程已清理${NC}"
+echo ""
+
+# 確保 .next/standalone 存在（production build）
+if [ ! -d ".next/standalone" ]; then
+    echo -e "${YELLOW}需要先 build，請運行: npm run build${NC}"
+    exit 1
+fi
+
+# 創建 app screen，包含 backend 和 frontend 兩個 window
+echo -e "${GREEN}創建 app screen...${NC}"
+
+# Window 1: Backend
+screen -dmS app bash -c "cd $SCRIPT_DIR && python3 backend/main.py; exec bash"
+
+# 等一下 backend 啟動
 sleep 2
 
-# 確保 Python 虛擬環境存在
-if [ ! -d "venv" ]; then
-    echo -e "${YELLOW}創建 Python 虛擬環境...${NC}"
-    python3 -m venv venv
-fi
+# Window 2: Frontend
+screen -S app -X screen -t frontend bash -c "cd $SCRIPT_DIR/.next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js; exec bash"
 
-# 激活虛擬環境並安裝依賴
-echo -e "${YELLOW}安裝 Python 依賴...${NC}"
-source venv/bin/activate
-pip install -q -r requirements.txt 2>/dev/null || pip install -r requirements.txt
-
-# 返回專案根目錄
-cd "$SCRIPT_DIR"
-
-# 啟動後端
-echo -e "${GREEN}啟動後端服務...${NC}"
-source venv/bin/activate
-nohup python backend/main.py > /tmp/position-calculator-backend.log 2>&1 &
-BACKEND_PID=$!
-echo "後端 PID: $BACKEND_PID"
-echo "後端日誌: /tmp/position-calculator-backend.log"
-
-# 等一下後端啟動
+# 等一下
 sleep 3
 
-# 檢查後端是否啟動成功
-if curl -s http://localhost:8000/api/health > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ 後端啟動成功${NC}"
-else
-    echo -e "${RED}✗ 後端啟動失敗，查看日誌: tail /tmp/position-calculator-backend.log${NC}"
-fi
-
-# 返回專案根目錄
-cd "$SCRIPT_DIR"
-
-# 啟動前端
-echo -e "${GREEN}啟動前端服務...${NC}"
-nohup npm run dev > /tmp/position-calculator-frontend.log 2>&1 &
-FRONTEND_PID=$!
-echo "前端 PID: $FRONTEND_PID"
-echo "前端日誌: /tmp/position-calculator-frontend.log"
-
-# 等一下前端啟動
-sleep 5
-
-# 檢查前端是否啟動成功
-if curl -s http://localhost:3000 > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ 前端啟動成功${NC}"
-else
-    echo -e "${RED}✗ 前端啟動失敗，查看日誌: tail /tmp/position-calculator-frontend.log${NC}"
-fi
-
 echo ""
 echo "=========================================="
-echo -e "${GREEN}  服務已啟動！${NC}"
+echo -e "${GREEN}  Screen 已創建！${NC}"
 echo "=========================================="
 echo ""
-echo "前端: http://localhost:3000"
-echo "後端: http://localhost:8000"
+echo "Screen 狀態:"
+screen -ls
 echo ""
-echo "常用命令:"
-echo "  tail -f /tmp/position-calculator-backend.log  # 查看後端日誌"
-echo "  tail -f /tmp/position-calculator-frontend.log # 查看前端日誌"
-echo "  curl http://localhost:8000/api/health         # 測試後端"
-echo "  ./stop-vps.sh                                     # 停止服務"
+echo "查看 Position Calculator:"
+echo "  screen -r app"
+echo "  - Ctrl+A n: 切換到下一個 window (frontend)"
+echo "  - Ctrl+A p: 切換到上一個 window (backend)"
+echo "  - Ctrl+A D: 退出 screen"
 echo ""
-echo "要停止服務，請運行: ./stop-vps.sh"
+echo "驗證服務:"
+echo "  curl -s -o /dev/null -w 'Frontend: %{http_code}\\n' http://localhost:3000/"
+echo "  ss -tlnp | grep -E ':8000|:3000'"

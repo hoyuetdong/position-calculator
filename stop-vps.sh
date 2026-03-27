@@ -4,11 +4,13 @@
 
 echo "停止 Position Calculator 服務..."
 
-# 殺掉進程
-pkill -f "python backend/main.py" 2>/dev/null && echo "✓ 後端已停止" || echo "- 後端未運行"
-pkill -f "next dev" 2>/dev/null && echo "✓ 前端已停止" || echo "- 前端未運行"
-pkill -f "next-server" 2>/dev/null && echo "✓ Next.js 已停止" || echo "- Next.js 未運行"
+# 殺掉 app screen
+screen -S app -X quit 2>/dev/null && echo "✓ app screen 已停止" || echo "- app screen 未運行"
+
+# 殺掉舊進程（確保乾淨）
+pkill -f "python3 backend/main.py" 2>/dev/null && echo "✓ Backend 已停止" || echo "- Backend 未運行"
+pkill -f "next-server" 2>/dev/null && echo "✓ Frontend 已停止" || echo "- Frontend 未運行"
 
 echo ""
-echo "所有服務已停止。"
-echo "日誌保留在 /tmp/position-calculator-*.log"
+echo "所有 Position Calculator 服務已停止。"
+echo "OpenD (opend screen) 保持運行。"
