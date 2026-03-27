@@ -426,68 +426,124 @@ curl -s http://localhost:8000/api/health
 
 ```
 VPS IP: 107.173.153.41
-OpenD Remote: 170.106.62.115:11111
-Frontend: 3000
-Backend: 8000
+OpenD: 170.106.62.115:11111 (Remote) / 127.0.0.1:11111 (Local)
+代碼: /opt/vcp-calculator
 
-代碼路徑: /opt/vcp-calculator
-
-Screen Sessions:
-- app: Python Backend
-- frontend: Next.js Frontend
-- opend: 富途 OpenD
-
+Screen: app (Backend:8000) | frontend (:3000) | opend (:11111)
 API Key: vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
+密碼: Yy442398!!
 ```
 
-## 部署命令速查
+## 系統架構
+
+```
+Yahoo Finance ──▶ Backend ──▶ Frontend (:3000)
+富途 OpenD ─────▶ │         (美股期貨報價)
+                  │         (港股報價/持倉/落單)
+```
+
+## 快速部署
 
 ```bash
-# SSH 進入 VPS
 ssh root@107.173.153.41
+cd /opt/vcp-calculator
 
-# === 查看 Screen ===
+# 拉取代碼
+git pull origin main
+
+# Build
+npm run build
+
+# 配置環境
+cat > .next/standalone/.env << EOF
+APP_PASSWORD=Yy442398!!
+PYTHON_API_URL=http://localhost:8000
+API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
+EOF
+
+mkdir -p .next/standalone/.next
+ln -sf ../../static .next/standalone/.next/static
+
+# 殺舊進程
+pkill -f "node"; pkill -f "main.py"; sleep 1
+
+# 啟動
+screen -dmS app bash -c "cd /opt/vcp-calculator && source venv/bin/activate && python3 backend/main.py; exec bash"
+sleep 3
+screen -dmS frontend bash -c "export APP_PASSWORD='Yy442398!!'; cd /opt/vcp-calculator/.next/standalone && exec node server.js; exec bash"
+```
+
+## 部署後驗證
+
+```bash
+# 檢查 Screen
 screen -ls
+# 預期: app, frontend, opend
 
-# === 進入 Screen 查看 ===
+# 檢查 Port
+ss -tlnp | grep -E "3000|8000|11111"
+
+# 測試 API
+curl http://localhost:8000/api/health                    # Backend 健康
+curl "http://localhost:8000/api/quote/ES"                 # Yahoo 期貨報價
+curl "http://localhost:8000/api/quote/00700"               # 富途港股報價
+curl http://localhost:8000/api/positions -H "X-API-Key: vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A="  # 美股持倉
+
+# 查看 Log
 screen -r app      # Backend
 screen -r frontend # Frontend
-screen -r opend    # OpenD
+screen -r opend    # 富途 OpenD
+```
 
-# === 退出 Screen ===
-# 在 screen 內按 Ctrl+A D
+## 常見問題排查
 
-# === OpenD 管理 ===
-# 確認 OpenD 運行
-ps aux | grep FutuOpenD | grep -v grep
+| 問題 | 原因 | 解決 |
+|------|------|------|
+| Backend 401 | Frontend 密碼錯 | 重設 `APP_PASSWORD` |
+| 富途報價失敗 | OpenD 未運行/未登入 | `screen -r opend` 確認已登入 |
+| 美股持倉空 | OpenD 未解鎖交易 | 確認 `FUTU_TRADE_PWD` 正確 |
+| Yahoo 報價失敗 | 網絡問題 | 測試 `curl finance.yahoo.com` |
+| Port 被佔用 | 舊進程未殺 | `pkill -9 -f node; pkill -9 -f main.py` |
 
-# 啟動 OpenD（如需）
+### 重啟 OpenD
+```bash
+pkill -9 FutuOpenD
 screen -S opend
-cd /opt/futuopend && ./FutuOpenD
+cd /opt/futuopend && ./FutuOpenD -cfg_file=/opt/futuopend/FutuOpenD.xml
 # Ctrl+A D 退出
+```
 
-# === 重啟 Position Calculator ===
-# 停止舊服務
-screen -S app -X quit 2>/dev/null
-pkill -f 'node' 2>/dev/null
+### 重啟 Backend/Frontend
+```bash
+screen -S app -X quit; pkill -f "node"
+screen -dmS app bash -c "cd /opt/vcp-calculator && source venv/bin/activate && python3 backend/main.py; exec bash"
+screen -dmS frontend bash -c "export APP_PASSWORD='Yy442398!!'; cd /opt/vcp-calculator/.next/standalone && exec node server.js; exec bash"
+```
 
-# 創建 wrapper script
-cat > /tmp/start-frontend.sh << 'EOF'
-#!/bin/bash
-export APP_PASSWORD='Yy442398!!'
-cd /opt/vcp-calculator/.next/standalone
-exec node server.js
-EOF
-chmod +x /tmp/start-frontend.sh
+## Screen 管理
 
-# 啟動 backend
-screen -dmS app bash -c 'cd /opt/vcp-calculator && python3 backend/main.py; exec bash'
+```bash
+screen -ls           # 查看所有
+screen -r app        # 進入 Backend
+screen -r frontend   # 進入 Frontend
+screen -r opend      # 進入 OpenD
+# 退出: Ctrl+A D
+```
 
-# 啟動 frontend
-screen -dmS frontend bash -c '/tmp/start-frontend.sh; exec bash'
+## 環境變量 (VPS)
 
-# === 完整更新流程 ===
-git pull origin main
-npm run build
-# 然後重啟如上
+```bash
+# 富途 OpenD (VPS 本地)
+FUTU_HOST=127.0.0.1
+FUTU_PORT=11111
+
+# 富途登入
+FUTU_LOGIN_ACCOUNT=7202895
+FUTU_LOGIN_PWD_MD5=eeef0f684aa5e2e5c1d1a51b4bf5643b
+FUTU_TRADE_PWD=442398
+
+# Backend
+PYTHON_API_URL=http://localhost:8000
+API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
+FUTU_DISABLE_LOG=1
 ```

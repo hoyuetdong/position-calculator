@@ -1010,7 +1010,7 @@ async def shutdown_event():
 def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
     """
     Fetch all open positions from OpenD via OpenSecTradeContext (supports HK + US in one call).
-    Only queries REAL + ACTIVE accounts.
+    Always queries REAL + ACTIVE accounts (ignores SIMULATE/REAL environment setting).
     Returns list of position dicts.
     """
     try:
@@ -1022,60 +1022,67 @@ def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
     all_positions = []
     
     for market in [futu.TrdMarket.HK, futu.TrdMarket.US]:
-        print(f"[Futu] Trying market: {market}")
-        ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+        market_name = "HK" if market == futu.TrdMarket.HK else "US"
+        print(f"[Futu] Trying {market_name} market...")
         try:
-            if trade_pwd:
-                ret_unlock, _ = ctx.unlock_trade(trade_pwd)
-                if ret_unlock != futu.RET_OK:
-                    raise ValueError("unlock_trade failed — check your trading password")
-
-            ret_acc, acc_list = ctx.get_acc_list()
-            if ret_acc != futu.RET_OK:
-                print(f"[Futu] get_acc_list failed for {market}: {acc_list}")
-                continue
-            print(f"[Futu] {market} acc_list: {acc_list.to_dict()}")
-
-            # Only use REAL + ACTIVE accounts
-            active_acc_ids = [
-                int(row["acc_id"])
-                for _, row in acc_list.iterrows()
-                if str(row.get("trd_env", "")).upper() == "REAL"
-                and str(row.get("acc_status", "")).upper() == "ACTIVE"
-            ]
-            print(f"[Futu] {market} REAL+ACTIVE acc_ids: {active_acc_ids}")
-
-            if not active_acc_ids:
-                continue
-
-            for acc_id in active_acc_ids:
-                ret, data = ctx.position_list_query(
-                    trd_env=futu.TrdEnv.REAL,
-                    acc_id=acc_id,
-                    refresh_cache=True,
-                )
-                print(f"[Futu] acc_id={acc_id} positions ret={ret}, rows={len(data) if ret == futu.RET_OK else 'ERR'}")
-                if ret != futu.RET_OK or data.empty:
-                    continue
-                for _, row in data.iterrows():
-                    qty = float(row.get("qty", 0))
-                    if qty <= 0:
+            ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+            try:
+                if trade_pwd:
+                    ret_unlock, _ = ctx.unlock_trade(trade_pwd)
+                    if ret_unlock != futu.RET_OK:
+                        print(f"[Futu] unlock_trade failed for {market_name}, skipping market")
                         continue
-                    code = str(row.get("code", ""))
-                    symbol, asset_type = _parse_futu_code(code)
-                    cost_price = float(row.get("cost_price", 0) or 0)
-                    nominal_price = float(row.get("nominal_price", 0) or 0)
-                    print(f"[Futu] Position found: {symbol} qty={qty}")
-                    all_positions.append({
-                        "symbol": symbol,
-                        "name": str(row.get("stock_name", symbol)),
-                        "quantity": qty,
-                        "cost_price": cost_price if cost_price > 0 else None,
-                        "current_price": nominal_price if nominal_price > 0 else None,
-                        "asset_type": asset_type,
-                    })
-        finally:
-            ctx.close()
+
+                ret_acc, acc_list = ctx.get_acc_list()
+                if ret_acc != futu.RET_OK:
+                    print(f"[Futu] get_acc_list failed for {market_name}: {acc_list}")
+                    continue
+                print(f"[Futu] {market_name} acc_list: {acc_list.to_dict()}")
+
+                # Only use REAL + ACTIVE accounts
+                active_acc_ids = [
+                    int(row["acc_id"])
+                    for _, row in acc_list.iterrows()
+                    if str(row.get("trd_env", "")).upper() == "REAL"
+                    and str(row.get("acc_status", "")).upper() == "ACTIVE"
+                ]
+                print(f"[Futu] {market_name} REAL+ACTIVE acc_ids: {active_acc_ids}")
+
+                if not active_acc_ids:
+                    print(f"[Futu] No REAL+ACTIVE accounts for {market_name}")
+                    continue
+
+                for acc_id in active_acc_ids:
+                    ret, data = ctx.position_list_query(
+                        trd_env=futu.TrdEnv.REAL,
+                        acc_id=acc_id,
+                        refresh_cache=True,
+                    )
+                    print(f"[Futu] acc_id={acc_id} positions ret={ret}, rows={len(data) if ret == futu.RET_OK else 'ERR'}")
+                    if ret != futu.RET_OK or data.empty:
+                        continue
+                    for _, row in data.iterrows():
+                        qty = float(row.get("qty", 0))
+                        if qty <= 0:
+                            continue
+                        code = str(row.get("code", ""))
+                        symbol, asset_type = _parse_futu_code(code)
+                        cost_price = float(row.get("cost_price", 0) or 0)
+                        nominal_price = float(row.get("nominal_price", 0) or 0)
+                        print(f"[Futu] Position found: {symbol} qty={qty}")
+                        all_positions.append({
+                            "symbol": symbol,
+                            "name": str(row.get("stock_name", symbol)),
+                            "quantity": qty,
+                            "cost_price": cost_price if cost_price > 0 else None,
+                            "current_price": nominal_price if nominal_price > 0 else None,
+                            "asset_type": asset_type,
+                        })
+            finally:
+                ctx.close()
+        except Exception as e:
+            print(f"[Futu] Error fetching {market_name} positions: {e}")
+            continue
     
     return all_positions
 
