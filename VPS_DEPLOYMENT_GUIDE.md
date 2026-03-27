@@ -269,10 +269,10 @@ pip install -r requirements.txt
 ps aux | grep FutuOpenD | grep -v grep
 
 # 2. 確認端口監聽
-netstat -tlnp | grep 11111
+ss -tlnp | grep 11111
 
 # 3. 測試 OpenD 連接
-telnet 170.106.62.115 11111
+timeout 3 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/11111' && echo 'OK' || echo 'FAIL'
 
 # 4. 進入 OpenD screen 查看日誌
 screen -r opend
@@ -284,6 +284,54 @@ cd /opt/futuopend
 ./FutuOpenD
 # 按 Ctrl+A D 退出
 ```
+
+### OpenD API 連接超時 (Connect Timeout)
+
+**症狀:**
+- Backend logs 顯示大量 `_connect_sync: Connect fail: conn=0(N); msg=Timeout`
+- OpenD screen 顯示已登入，但 API 全部 timeout
+- Port 看似監聽中但實際連接失敗
+
+**原因:**
+- OpenD 進程存在但內部連接有問題（常見於長時間運行後）
+- 需要完全重啟 OpenD
+
+**解決:**
+```bash
+# 殺掉舊 OpenD 進程
+pkill -9 FutuOpenD
+screen -S opend -X quit 2>/dev/null
+sleep 2
+
+# 重新啟動 OpenD
+screen -dmS opend bash -c 'cd /opt/futuopend && ./FutuOpenD -cfg_file=/opt/futuopend/FutuOpenD.xml; exec bash'
+
+# 等待登入（約10秒）
+sleep 10
+
+# 驗證連接
+timeout 3 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/11111' && echo 'OK' || echo 'FAIL'
+
+# 然後重啟 Backend
+screen -S app -X quit
+sleep 2
+screen -dmS app bash -c 'cd /opt/vcp-calculator && source venv/bin/activate && python3 backend/main.py; exec bash'
+sleep 5
+curl -s http://localhost:8000/api/health
+```
+
+### 富途代碼格式
+
+**注意:** 富途 API 需要正確嘅市場前綴：
+
+| 市場 | 格式 | 例子 |
+|------|------|------|
+| 港股 | `HK.` | `HK.00700` |
+| A股滬深 | `SZ.` / `SH.` | `SZ.000001` |
+| 美股 | `US.` | `US.AAPL` |
+
+**錯誤格式:** `00700` → `ERROR. format of code 00700 is wrong`
+**正確格式:** `HK.00700` → 成功返回報價
 
 ### 驗證命令
 
@@ -546,4 +594,42 @@ FUTU_TRADE_PWD=442398
 PYTHON_API_URL=http://localhost:8000
 API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
 FUTU_DISABLE_LOG=1
+
+# OpenD Watchdog (自動重啟卡住嘅 OpenD)
+WATCHDOG_CHECK_INTERVAL=30    # 檢查間隔（秒），預設30
+WATCHDOG_MAX_FAILURES=3        # 連續失敗次數後重啟，預設3
+```
+
+## OpenD Watchdog 自動修復
+
+Backend 內置 OpenD Watchdog，自動檢測並修復 OpenD 連接問題。
+
+**工作原理:**
+1. 每 30 秒檢查一次 OpenD 連接（使用 socket 測試）
+2. 如果連續 3 次失敗，自動重啟 OpenD
+3. 重啟後等待 10 秒驗證連接恢復
+
+**特點:**
+- 後台線程運行，唔影響正常交易
+- 避免 OpenD 長期運行後卡住嘅問題
+- 上次重啟後起碼等 5 分鐘先會再次重啟（防止連續重啟）
+
+**日誌範例:**
+```
+[Watchdog] OpenD connection failed (1/3)
+[Watchdog] OpenD connection failed (2/3)
+[Watchdog] OpenD appears stuck, attempting restart...
+[Watchdog] Restarting OpenD...
+[Watchdog] OpenD restart successful
+[Watchdog] OpenD connection restored
+```
+
+**手動測試 watchdog:**
+```bash
+# 查看 backend 日誌確認 watchdog 運行
+screen -r app
+# 應該看到: [Watchdog] Starting OpenD watchdog...
+
+# 手動測試連接
+timeout 3 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/11111' && echo 'OK'
 ```

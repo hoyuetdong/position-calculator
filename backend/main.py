@@ -152,6 +152,190 @@ _pending_stop_lock = threading.RLock()  # 用 RLock 避免同一 thread 內重�
 _monitor_thread: Optional[threading.Thread] = None
 _monitor_running = threading.Event()
 
+# ================================================================================
+# OpenD Watchdog - 自動重啟卡住嘅 OpenD
+# ================================================================================
+_watchdog_thread: Optional[threading.Thread] = None
+_watchdog_running = threading.Event()
+_WATCHDOG_CHECK_INTERVAL = 30  # 每30秒檢查一次
+_WATCHDOG_MAX_FAILURES = 3  # 連續3次失敗先重啟
+
+
+def _test_opend_connection(host: str, port: int, timeout: float = 3.0) -> bool:
+    """
+    測試 OpenD 連接是否正常。
+    使用 socket 測試，避免創建完整嘅 futu context。
+    Returns True if connection successful, False otherwise.
+    """
+    import socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def _restart_opend():
+    """
+    重啟 OpenD 進程。
+    使用 subprocess 調用 shell 腳本重啟，避免喺同一個 process 殺自己。
+    """
+    import subprocess
+    print("[Watchdog] Restarting OpenD...")
+    
+    restart_script = "/tmp/restart_opend.sh"
+    
+    # 創建重啟腳本
+    script_content = """#!/bin/bash
+# 停止舊 OpenD
+pkill -9 FutuOpenD 2>/dev/null
+sleep 2
+
+# 重啟 OpenD
+screen -dmS opend bash -c 'cd /opt/futuopend && ./FutuOpenD -cfg_file=/opt/futuopend/FutuOpenD.xml; exec bash'
+
+# 等 OpenD 啟動
+sleep 10
+
+# 驗證
+if timeout 3 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/11111' 2>/dev/null; then
+    echo "OpenD restarted successfully"
+    exit 0
+else
+    echo "OpenD restart failed"
+    exit 1
+fi
+"""
+    
+    try:
+        with open(restart_script, 'w') as f:
+            f.write(script_content)
+        os.chmod(restart_script, 0o755)
+        
+        # 執行重啟腳本
+        result = subprocess.run(
+            ['/bin/bash', restart_script],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        print(f"[Watchdog] Restart result: {result.returncode}")
+        if result.stdout:
+            print(f"[Watchdog] stdout: {result.stdout}")
+        if result.stderr:
+            print(f"[Watchdog] stderr: {result.stderr}")
+        
+        return result.returncode == 0
+    except Exception as e:
+        print(f"[Watchdog] Failed to restart OpenD: {e}")
+        return False
+
+
+def _restart_backend():
+    """
+    重啟 Backend 進程。
+    呢個函數會打印警告，因為我哋唔可以喺同一個 process 重啟自己。
+    實際重啟需要外部工具或者 cron。
+    """
+    print("[Watchdog] Backend restart needed. Please restart the backend manually or via systemd.")
+    print("[Watchdog] Hint: screen -S app -X quit && screen -dmS app bash -c 'cd /opt/vcp-calculator && source venv/bin/activate && python3 backend/main.py; exec bash'")
+
+
+def _watchdog_loop(check_interval: int = _WATCHDOG_CHECK_INTERVAL, max_failures: int = _WATCHDOG_MAX_FAILURES):
+    """
+    Watchdog 監控線程。
+    定期檢測 OpenD 連接，如果連續失敗 N 次，自動重啟 OpenD。
+    """
+    print(f"[Watchdog] Starting OpenD watchdog (interval: {check_interval}s, max_failures: {max_failures})")
+    
+    failure_count = 0
+    last_restart = 0
+    
+    while _watchdog_running.is_set():
+        try:
+            host = _get_futu_host()
+            port = int(os.getenv("FUTU_PORT", "11111"))
+            
+            is_connected = _test_opend_connection(host, port)
+            
+            if is_connected:
+                if failure_count > 0:
+                    print(f"[Watchdog] OpenD connection restored (was {failure_count} failures)")
+                failure_count = 0
+            else:
+                failure_count += 1
+                print(f"[Watchdog] OpenD connection failed ({failure_count}/{max_failures})")
+                
+                # 避免太頻繁重啟（上次重啟後起碼等5分鐘）
+                import time
+                current_time = time.time()
+                if failure_count >= max_failures and (current_time - last_restart) > 300:
+                    print(f"[Watchdog] OpenD appears stuck, attempting restart...")
+                    
+                    if _restart_opend():
+                        failure_count = 0
+                        last_restart = current_time
+                        print(f"[Watchdog] OpenD restart successful")
+                    else:
+                        print(f"[Watchdog] OpenD restart failed, will retry later")
+                
+        except Exception as e:
+            print(f"[Watchdog] Error in watchdog loop: {e}")
+        
+        time.sleep(check_interval)
+    
+    print("[Watchdog] OpenD watchdog stopped")
+
+
+def start_watchdog(check_interval: int = _WATCHDOG_CHECK_INTERVAL, max_failures: int = _WATCHDOG_MAX_FAILURES):
+    """啟動 OpenD Watchdog 線程。"""
+    global _watchdog_thread
+    
+    if _watchdog_thread is not None and _watchdog_thread.is_alive():
+        print("[Watchdog] Watchdog already running")
+        return
+    
+    # 允許環境變數覆蓋
+    env_interval = os.getenv("WATCHDOG_CHECK_INTERVAL")
+    env_failures = os.getenv("WATCHDOG_MAX_FAILURES")
+    
+    if env_interval:
+        try:
+            check_interval = int(env_interval)
+        except ValueError:
+            pass
+    
+    if env_failures:
+        try:
+            max_failures = int(env_failures)
+        except ValueError:
+            pass
+    
+    _watchdog_running.set()
+    _watchdog_thread = threading.Thread(
+        target=_watchdog_loop,
+        args=(check_interval, max_failures),
+        daemon=True,
+        name="OpenDWatchdog"
+    )
+    _watchdog_thread.start()
+    print(f"[Watchdog] OpenD watchdog thread started (interval: {check_interval}s, max_failures: {max_failures})")
+
+
+def stop_watchdog():
+    """停止 OpenD Watchdog 線程。"""
+    global _watchdog_thread
+    
+    _watchdog_running.clear()
+    if _watchdog_thread is not None:
+        _watchdog_thread.join(timeout=5)
+        _watchdog_thread = None
+    print("[Watchdog] OpenD watchdog stopped")
+
+
 # 重試限制常量
 MAX_STOP_LOSS_RETRIES = 5  # 最多重試5次
 RETRY_BACKOFF_BASE = 2  # 基礎等待秒數
@@ -1022,13 +1206,18 @@ async def startup_event():
     port = int(os.getenv("FUTU_PORT", "11111"))
     print(f"[Startup] Host: {host}, Port: {port}")
     start_background_monitor(host, port)
+    
+    print("[Startup] Step 4: Starting OpenD watchdog...")
+    start_watchdog()
+    
     print("[Startup] Done!")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """App關閉時停止background monitor."""
+    """App關閉時停止background monitor 和 watchdog."""
     stop_background_monitor()
+    stop_watchdog()
 
 
 def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
