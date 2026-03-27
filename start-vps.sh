@@ -37,6 +37,13 @@ if [ ! -d ".next/standalone" ]; then
     exit 1
 fi
 
+# 確保 static files symlink 存在（standalone 模式的 bug）
+if [ ! -L ".next/standalone/.next/static" ]; then
+    echo -e "${GREEN}創建 static files symlink...${NC}"
+    rm -rf .next/standalone/.next/static 2>/dev/null
+    ln -sf ../../static .next/standalone/.next/static
+fi
+
 # Load environment variables from .env
 if [ -f ".env" ]; then
     echo -e "${GREEN}載入 .env 環境變數...${NC}"
