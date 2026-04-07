@@ -1246,9 +1246,13 @@ def _place_order(
             "time_in_force": time_in_force_enum,
         }
 
-        # 對於 STOP orders，需要設置 aux_price (觸發價)
+        # 對於 STOP orders (Stop Entry / 突破單)：
+        # - price = 執行價 (entryPrice)
+        # - aux_price = 觸發價 (triggerPrice)
         if order_type.upper() == "STOP" and trigger_price:
-            place_order_kwargs["aux_price"] = trigger_price
+            place_order_kwargs["price"] = price  # 執行價
+            place_order_kwargs["aux_price"] = trigger_price  # 觸發價
+            print(f"[Order] STOP order: price=${price}, aux_price=${trigger_price}")
 
         # For GTD orders, set expire date
         if time_in_force.upper() == "GTD" and expire_date and expire_date.strip():
@@ -1724,7 +1728,7 @@ def place_order(order: OrderRequest):
     print(f"[Order] Request: {order.model_dump_json()}")
     print(f"[Order] Trade environment: {trd_env}")
     print(f"[Order] Time in force: {order.time_in_force}, expire_date: {order.expire_date}")
-    print(f"[Order] Order type: {order.order_type}, trigger_price: {order.trigger_price}")
+    print(f"[Order] Order type: {order.order_type}, trigger_price: {order.trigger_price}, price: {order.price}")
 
     try:
         result = _place_order(
