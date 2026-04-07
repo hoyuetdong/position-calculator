@@ -41,12 +41,12 @@ export interface OrderRequest {
   symbol: string
   price: number
   quantity: number
-  order_type?: string
+  order_type?: string  // "LIMIT" | "MARKET" | "STOP"
   side?: string
   time_in_force?: string  // "DAY" | "GTC" | "GTD"
   expire_date?: string    // "YYYY-MM-DD", only for GTD
   stop_loss_price?: number
-  remark?: string
+  trigger_price?: number  // Stop Entry觸發價
 }
 
 export interface OrderResponse {

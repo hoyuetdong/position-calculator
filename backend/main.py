@@ -141,6 +141,7 @@ from pathlib import Path
 
 # 定義數據儲存檔案路徑
 _PENDING_STOPS_FILE = Path(__file__).parent / "pending_stops.json"
+_ORDER_HISTORY_FILE = Path(__file__).parent / "order_history.json"
 
 # 呢度用嚟存儲有待觸發止蝕單嘅訂單
 # Key: order_id (entry order)
@@ -270,7 +271,6 @@ def _watchdog_loop(check_interval: int = _WATCHDOG_CHECK_INTERVAL, max_failures:
                 print(f"[Watchdog] OpenD connection failed ({failure_count}/{max_failures})")
                 
                 # 避免太頻繁重啟（上次重啟後起碼等5分鐘）
-                import time
                 current_time = time.time()
                 if failure_count >= max_failures and (current_time - last_restart) > 300:
                     print(f"[Watchdog] OpenD appears stuck, attempting restart...")
@@ -385,6 +385,181 @@ def _save_pending_stops_to_file() -> None:
         print(f"[StopMonitor] Failed to save pending stops file: {e}")
 
 
+def _query_futu_open_orders(host: str, port: int, trd_env: str) -> Dict[str, Dict]:
+    """
+    查詢富途 API 拎所有未成交的 open orders.
+    返回 dict: {order_id: {status, fill_qty, order_qty, code, side, ...}}
+    """
+    try:
+        import futu
+    except ImportError:
+        return {}
+
+    trd_env_enum = futu.TrdEnv.SIMULATE if trd_env.upper() == "SIMULATE" else futu.TrdEnv.REAL
+    open_orders: Dict[str, Dict] = {}
+
+    # 遍歷 HK 和 US 市場
+    for market in [futu.TrdMarket.US, futu.TrdMarket.HK]:
+        ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+        try:
+            ret_acc, acc_list = ctx.get_acc_list()
+            if ret_acc != futu.RET_OK:
+                continue
+
+            # 搵符合環境的帳戶
+            acc_ids = [
+                int(row["acc_id"])
+                for _, row in acc_list.iterrows()
+                if str(row.get("trd_env", "")).upper() == trd_env.upper()
+                and str(row.get("acc_status", "")).upper() == "ACTIVE"
+            ]
+
+            for acc_id in acc_ids:
+                # 查詢所有訂單 (包括未成交的)
+                ret, data = ctx.order_list_query(
+                    trd_env=trd_env_enum,
+                    acc_id=acc_id,
+                )
+
+                if ret == futu.RET_OK and data is not None and not data.empty:
+                    for _, row in data.iterrows():
+                        order_id = str(row.get("order_id", ""))
+                        status = str(row.get("order_status", "")).upper()
+                        # 只保留未成交的訂單
+                        if status in ["SUBMITTED", "ACTIVE", "PARTIAL_FILLED", "FILLED_ALL"]:
+                            open_orders[order_id] = {
+                                "status": status,
+                                "fill_qty": int(float(row.get("dealt_qty", 0) or 0)),
+                                "order_qty": int(float(row.get("qty", 0) or 0)),
+                                "code": str(row.get("code", "")),
+                                "side": str(row.get("trd_side", "")),
+                                "acc_id": acc_id,
+                            }
+        finally:
+            ctx.close()
+
+    return open_orders
+
+
+def _restore_pending_stops_from_history(host: str, port: int, trd_env: str) -> int:
+    """
+    Startup 時自動恢復未成交訂單嘅止蝕資訊.
+    邏輯：
+    1. 查詢富途 API 拎所有未成交的 open orders
+    2. 比對 order_history.json，找出邊啲未成交訂單有設置止蝕價
+    3. 自動恢復到 pending_stops.json
+
+    返回：恢復的訂單數量
+    """
+    print("[StopMonitor] Starting pending stops restoration from order history...")
+
+    # 1. 查詢富途 API 拎所有未成交的 open orders
+    futu_open_orders = _query_futu_open_orders(host, port, trd_env)
+    if not futu_open_orders:
+        print("[StopMonitor] No open orders found in Futu, nothing to restore")
+        return 0
+
+    print(f"[StopMonitor] Found {len(futu_open_orders)} open orders in Futu")
+
+    # 2. 讀取 order_history.json
+    history = _load_order_history_from_file()
+    if not history:
+        print("[StopMonitor] No order history found, nothing to restore")
+        return 0
+
+    print(f"[StopMonitor] Loaded {len(history)} records from order history")
+
+    # 3. 遍歷歷史記錄，找出未成交但有止蝕價的訂單
+    restored_count = 0
+    for record in history:
+        entry_order_id = record.get("entry_order_id")
+        if not entry_order_id:
+            continue
+
+        # 檢查訂單是否在富途的 open orders 入面
+        if entry_order_id in futu_open_orders:
+            order_data = futu_open_orders[entry_order_id]
+            status = order_data.get("status", "")
+            fill_qty = order_data.get("fill_qty", 0)
+            stop_loss_price = record.get("stop_loss_price")
+
+            if stop_loss_price:
+                # 檢查是否已經恢復過 (避免重複)
+                with _pending_stop_lock:
+                    if entry_order_id in _pending_stop_orders:
+                        print(f"[StopMonitor] Order {entry_order_id} already in pending, skipping")
+                        continue
+
+                # 計算需要掛止蝕既股數
+                stop_loss_placed_qty = record.get("stop_loss_placed_qty", 0)
+                total_qty = record.get("quantity", 0)
+                new_filled_qty = fill_qty - stop_loss_placed_qty
+
+                # 恢復到 pending_stops.json
+                restored_order = {
+                    "symbol": record.get("symbol"),
+                    "quantity": total_qty,
+                    "stop_loss_price": stop_loss_price,
+                    "futu_code": record.get("futu_code"),
+                    "acc_id": record.get("acc_id") or order_data.get("acc_id"),
+                    "trd_env": record.get("trd_env") or trd_env,
+                    "direction": record.get("direction", "LONG"),
+                    "filled_qty": fill_qty,
+                    "stop_loss_placed_qty": stop_loss_placed_qty,
+                    "restored_from_history": True,  # 標記係從歷史恢復的
+                    "restored_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+                with _pending_stop_lock:
+                    _pending_stop_orders[entry_order_id] = restored_order
+
+                _save_pending_stops_to_file()
+                restored_count += 1
+                print(f"[StopMonitor] RESTORED order {entry_order_id}: {record.get('symbol')} fill_qty={fill_qty}/{total_qty}, stop_price=${stop_loss_price}, status={status}")
+            else:
+                print(f"[StopMonitor] Order {entry_order_id} in history but no stop_loss_price, skipping")
+        else:
+            # 訂單不在 open orders 入面，可能已經完全成交或取消咗
+            # 呢個唔需要恢復，因為或者已經處理過
+            pass
+
+    print(f"[StopMonitor] Restoration complete: {restored_count} orders restored")
+    return restored_count
+
+
+def _load_order_history_from_file() -> List[Dict]:
+    """從 order_history.json 讀取所有歷史記錄 (線程安全)."""
+    if not _ORDER_HISTORY_FILE.exists():
+        return []
+
+    try:
+        with open(_ORDER_HISTORY_FILE, 'r') as f:
+            data = json.load(f)
+            if not isinstance(data, list):
+                return []
+            print(f"[StopMonitor] Loaded {len(data)} order history records from file")
+            return data
+    except Exception as e:
+        print(f"[StopMonitor] Failed to load order history file: {e}")
+        return []
+
+
+def _append_order_to_history(order_record: Dict) -> None:
+    """
+    追加訂單記錄到 order_history.json (永久保存，永不刪除).
+    呢個係雙重持久化嘅第二層，確保即使 pending_stops.json 被清空，
+    都可以從歷史恢復未成交訂單嘅止蝕資訊。
+    """
+    try:
+        history = _load_order_history_from_file()
+        history.append(order_record)
+        with open(_ORDER_HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=2)
+        print(f"[StopMonitor] Appended order to history: {order_record.get('entry_order_id', 'N/A')}")
+    except Exception as e:
+        print(f"[StopMonitor] Failed to append order to history: {e}")
+
+
 def _init_pending_stops_from_file() -> None:
     """初始化時由 file load pending stops 到 memory (線程安全)."""
     global _pending_stop_orders
@@ -405,7 +580,7 @@ def _get_pending_stop_orders() -> Dict[str, Dict]:
 
 
 def _add_pending_stop_order(entry_order_id: str, order_info: Dict) -> None:
-    """加入有待觸發止蝕單到隊列，同時寫入 file."""
+    """加入有待觸發止蝕單到隊列，同時寫入 file 和 order_history."""
     with _pending_stop_lock:
         order_info['created_at'] = datetime.now(timezone.utc).isoformat()
         order_info['filled_qty'] = 0
@@ -417,6 +592,13 @@ def _add_pending_stop_order(entry_order_id: str, order_info: Dict) -> None:
             order_info['last_retry_at'] = None
         _pending_stop_orders[entry_order_id] = order_info
         _save_pending_stops_to_file()
+        
+        # 雙重持久化：同時寫入 order_history.json (永不刪除)
+        _append_order_to_history({
+            "entry_order_id": entry_order_id,
+            **order_info
+        })
+        
         print(f"[StopMonitor] Added pending stop order: entry_id={entry_order_id}, stop_price={order_info.get('stop_loss_price')}, total_qty={order_info.get('quantity')}")
 
 
@@ -441,14 +623,79 @@ def _query_order_status_and_fill(host: str, port: int, order_id: str, acc_id: in
     """
     查詢訂單狀態，返回包含狀態同成交股數既 dict.
     Return: {"status": "FILLED"/"PARTIAL_FILLED"/"SUBMITTED"/etc, "fill_qty": int, "order_qty": int}
+    
+    注意：呢個函數會嘗試喺 REAL 環境入面查找訂單，
+    如果 acc_id 唔正確，會遍歷所有 REAL 帳戶直到搵到為止。
     """
     try:
         import futu
         
         trd_env_enum = futu.TrdEnv.SIMULATE if trd_env.upper() == "SIMULATE" else futu.TrdEnv.REAL
         
-        # Try both HK and US markets
-        for market in [futu.TrdMarket.HK, futu.TrdMarket.US]:
+        # 如果係 REAL 環境，我哋需要嘗試所有 REAL 帳戶，因為 acc_id 可能已經過時
+        if trd_env.upper() == "REAL":
+            print(f"[StopMonitor] Querying order {order_id} in REAL environment (acc_id hint: {acc_id})")
+            # 首先創建一個 context 嚟獲取帳戶列表
+            ctx_list = futu.OpenSecTradeContext(filter_trdmarket=futu.TrdMarket.US, host=host, port=port)
+            try:
+                ret_acc, acc_list = ctx_list.get_acc_list()
+                if ret_acc != futu.RET_OK:
+                    print(f"[StopMonitor] Failed to get acc_list: {acc_list}")
+                    return None
+                
+                # 獲取所有 REAL + ACTIVE 帳戶
+                real_acc_ids = [
+                    int(row["acc_id"])
+                    for _, row in acc_list.iterrows()
+                    if str(row.get("trd_env", "")).upper() == "REAL"
+                    and str(row.get("acc_status", "")).upper() == "ACTIVE"
+                ]
+                
+                if not real_acc_ids:
+                    print(f"[StopMonitor] No REAL+ACTIVE accounts found!")
+                    return None
+                
+                print(f"[StopMonitor] Trying {len(real_acc_ids)} REAL accounts: {real_acc_ids}")
+                
+                # 嘗試每個帳戶直到搵到訂單
+                for try_acc_id in real_acc_ids:
+                    for market in [futu.TrdMarket.US, futu.TrdMarket.HK]:
+                        ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+                        try:
+                            ret, data = ctx.order_list_query(
+                                trd_env=futu.TrdEnv.REAL,
+                                acc_id=try_acc_id,
+                                order_id=order_id,
+                            )
+                            
+                            if ret == futu.RET_OK and data is not None and not data.empty:
+                                # Find the order with matching order_id
+                                for _, row in data.iterrows():
+                                    if str(row.get("order_id", "")) == str(order_id):
+                                        status = str(row.get("order_status", "")).upper()
+                                        fill_qty = int(float(row.get("dealt_qty", 0) or 0))
+                                        order_qty = int(float(row.get("qty", 0) or 0))
+                                        code = str(row.get("code", ""))
+                                        
+                                        print(f"[StopMonitor] Found order {order_id} in acc {try_acc_id} ({code}): {status}, fill_qty: {fill_qty}/{order_qty}")
+                                        
+                                        return {
+                                            "status": status,
+                                            "fill_qty": fill_qty,
+                                            "order_qty": order_qty,
+                                            "acc_id": try_acc_id,  # 返回正確嘅 acc_id
+                                        }
+                        finally:
+                            ctx.close()
+                
+                # 搵唔到訂單
+                print(f"[StopMonitor] Order {order_id} not found in any REAL account")
+                return None
+            finally:
+                ctx_list.close()
+        
+        # SIMULATE 環境：使用原始邏輯
+        for market in [futu.TrdMarket.US, futu.TrdMarket.HK]:
             ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
             try:
                 ret, data = ctx.order_list_query(
@@ -623,6 +870,10 @@ def _monitor_loop(host: str, port: int, check_interval: float = 2.0):
                     total_qty = order_info["quantity"]
                     stop_loss_placed_qty = order_info.get("stop_loss_placed_qty", 0)
                     
+                    # 如果 _query_order_status_and_fill 返回了正確的 acc_id，使用佢
+                    # 否則使用原始的 acc_id
+                    effective_acc_id = order_data.get("acc_id", acc_id)
+                    
                     # Handle FILLED or PARTIAL_FILLED - Futu uses FILLED_ALL
                     if status == "FILLED" or status == "PARTIAL_FILLED" or status == "FILLED_ALL":
                         if fill_qty > 0:
@@ -630,7 +881,7 @@ def _monitor_loop(host: str, port: int, check_interval: float = 2.0):
                             new_filled_qty = fill_qty - stop_loss_placed_qty
                             
                             if new_filled_qty > 0:
-                                print(f"[StopMonitor] Entry order {entry_order_id} {status}! New fill: {new_filled_qty} shares (total filled: {fill_qty}/{total_qty}, already placed stop: {stop_loss_placed_qty}). Triggering stop order...")
+                                print(f"[StopMonitor] Entry order {entry_order_id} {status}! New fill: {new_filled_qty} shares (total filled: {fill_qty}/{total_qty}, already placed stop: {stop_loss_placed_qty}). Triggering stop order with acc_id={effective_acc_id}...")
                                 
                                 # 只為「新增成交股數」落 STOP order
                                 result = _place_stop_order(
@@ -639,7 +890,7 @@ def _monitor_loop(host: str, port: int, check_interval: float = 2.0):
                                     symbol=order_info["symbol"],
                                     quantity=new_filled_qty,
                                     stop_loss_price=order_info["stop_loss_price"],
-                                    acc_id=acc_id,
+                                    acc_id=effective_acc_id,  # 使用動態獲取的 acc_id
                                     trd_env=trd_env,
                                     trade_pwd=trade_pwd,
                                     direction=order_info.get("direction", "LONG"),  # 傳入方向
@@ -887,6 +1138,7 @@ def _place_order(
     stop_loss_price: Optional[float] = None,
     time_in_force: str = "DAY",  # DAY / GTC / GTD
     expire_date: Optional[str] = None,  # YYYY-MM-DD, only for GTD
+    trigger_price: Optional[float] = None,  # Stop Entry觸發價
 ) -> Dict:
     """
     Place an order via Futu OpenD.
@@ -955,7 +1207,13 @@ def _place_order(
         acc_id = acc_ids[0]
         
         # Determine order type
-        if order_type.upper() == "MARKET":
+        # STOP order: 使用 trigger_price (Stop Entry 單)
+        if order_type.upper() == "STOP" and trigger_price:
+            order_type_enum = futu.OrderType.STOP
+            # Stop Entry 單的 price = 0，trigger_price = 觸發價
+            price = 0
+            print(f"[Order] Using STOP order type with trigger_price=${trigger_price}")
+        elif order_type.upper() == "MARKET":
             order_type_enum = futu.OrderType.MARKET
             # Market order uses 0 as price
             price = 0
@@ -987,6 +1245,10 @@ def _place_order(
             "acc_id": acc_id,
             "time_in_force": time_in_force_enum,
         }
+
+        # 對於 STOP orders，需要設置 aux_price (觸發價)
+        if order_type.upper() == "STOP" and trigger_price:
+            place_order_kwargs["aux_price"] = trigger_price
 
         # For GTD orders, set expire date
         if time_in_force.upper() == "GTD" and expire_date and expire_date.strip():
@@ -1129,11 +1391,12 @@ class OrderRequest(BaseModel):
     symbol: str
     price: float
     quantity: int
-    order_type: str = "LIMIT"  # "LIMIT" or "MARKET"
+    order_type: str = "LIMIT"  # "LIMIT" / "STOP" / "MARKET"
     side: str = "BUY"  # "BUY" or "SELL"
     time_in_force: str = "DAY"  # "DAY" (當日有效) / "GTC" (撤單前有效) / "GTD" (指定日期前有效)
     expire_date: Optional[str] = None  # Format: "YYYY-MM-DD", only used when time_in_force="GTD"
-    stop_loss_price: Optional[float] = None  # Stop loss price for automatic stop order
+    stop_loss_price: Optional[float] = None  # 止蝕價（倉位成交後自動觸發止蝕單）
+    trigger_price: Optional[float] = None  # 觸發價（Stop Entry單用：突破呢個價自動成交）
     remark: Optional[str] = None
 
 
@@ -1201,13 +1464,18 @@ async def startup_event():
     env_from_env = os.getenv("TRADE_ENV", "SIMULATE").upper()
     _set_trade_env(env_from_env)
     
-    print("[Startup] Step 3: Starting background monitor...")
+    print("[Startup] Step 3: Restoring pending stops from order history...")
+    # 雙重保險：Startup 時從 order_history.json 恢復未成交訂單
     host = _get_futu_host()
     port = int(os.getenv("FUTU_PORT", "11111"))
-    print(f"[Startup] Host: {host}, Port: {port}")
+    restored_count = _restore_pending_stops_from_history(host, port, env_from_env)
+    if restored_count > 0:
+        print(f"[Startup] RESTORED {restored_count} pending stop orders from history!")
+    
+    print("[Startup] Step 4: Starting background monitor...")
     start_background_monitor(host, port)
     
-    print("[Startup] Step 4: Starting OpenD watchdog...")
+    print("[Startup] Step 5: Starting OpenD watchdog...")
     start_watchdog()
     
     print("[Startup] Done!")
@@ -1430,15 +1698,16 @@ def place_order(order: OrderRequest):
 
     Required fields:
     - symbol: Stock symbol (e.g., AAPL, 00700, 700.HK)
-    - price: Order price (ignored for MARKET orders)
+    - price: Order price (ignored for MARKET/STOP orders)
     - quantity: Number of shares
 
     Optional fields:
-    - order_type: "LIMIT" (default) or "MARKET"
-    - side: "BUY" (default) or "SELL"
+    - order_type: "LIMIT" (default) / "MARKET" / "STOP" (Stop Entry)
+    - side: "BUY" (default) / "SELL"
     - time_in_force: "DAY" (當日有效) / "GTC" (撤單前有效) / "GTD" (指定日期前有效)
     - expire_date: "YYYY-MM-DD", only used when time_in_force="GTD"
-    - remark: Optional order note
+    - stop_loss_price: Optional stop loss price (entry成交後自動觸發止蝕單)
+    - trigger_price: Only for order_type="STOP" (Stop Entry)，當現價觸及呢個價自動成交
     """
     # Get config from environment
     host = _get_futu_host()
@@ -1455,6 +1724,7 @@ def place_order(order: OrderRequest):
     print(f"[Order] Request: {order.model_dump_json()}")
     print(f"[Order] Trade environment: {trd_env}")
     print(f"[Order] Time in force: {order.time_in_force}, expire_date: {order.expire_date}")
+    print(f"[Order] Order type: {order.order_type}, trigger_price: {order.trigger_price}")
 
     try:
         result = _place_order(
@@ -1470,6 +1740,7 @@ def place_order(order: OrderRequest):
             stop_loss_price=order.stop_loss_price,
             time_in_force=order.time_in_force,
             expire_date=order.expire_date,
+            trigger_price=order.trigger_price,
         )
         
         return OrderResponse(
