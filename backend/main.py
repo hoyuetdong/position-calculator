@@ -1216,7 +1216,7 @@ def _place_order(
             if order_type.upper() == "MARKET":
                 price = 0  # 市價成交
             else:
-                price = order_price  # 用戶指定的執行價
+                pass  # 用戶指定的執行價（保持 price 不變）
             print(f"[Order] Using STOP order type with trigger_price=${trigger_price}, price=${price}")
         elif order_type.upper() == "MARKET":
             order_type_enum = futu.OrderType.MARKET
@@ -1224,7 +1224,7 @@ def _place_order(
             price = 0
         else:
             order_type_enum = futu.OrderType.ABSOLUTE_LIMIT
-            price = order_price
+            # price 保持不變（已在前面設定）
 
         # Determine time_in_force
         if time_in_force.upper() == "GTC":
