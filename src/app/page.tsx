@@ -801,11 +801,20 @@ export default function Home() {
         }
       }
 
+      // 突破單觸發後以市價成交
+      let finalOrderType = effectiveOrderType
+      let finalPrice = parseFloat(entryPrice)
+      
+      if (effectiveOrderType === 'STOP') {
+        finalOrderType = 'MARKET'  // 突破觸發後用市價
+        finalPrice = 0  // 市價不需要價格
+      }
+
       const response = await placeOrder({
         symbol: ticker.toUpperCase(),
-        price: parseFloat(entryPrice),
+        price: finalPrice,
         quantity: shares,
-        order_type: effectiveOrderType,
+        order_type: finalOrderType,
         side: direction === 'LONG' ? 'BUY' : 'SELL',
         stop_loss_price: stopLoss ? parseFloat(stopLoss) : undefined,
         time_in_force: timeInForce,
@@ -1236,7 +1245,16 @@ export default function Home() {
                 {/* 右邊：買入價 & 止蝕價 */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="text-sm text-muted-foreground">{direction === 'LONG' ? '買入價 ($)' : '賣出價 ($)'}</label>
+                    <label className="text-sm text-muted-foreground">觸發/限價 ($)</label>
+                    {quoteData?.lastPrice && entryPrice && (
+                      <p className={`text-xs mt-1 ${parseFloat(entryPrice) > quoteData.lastPrice ? 'text-orange-400' : 'text-muted-foreground'}`}>
+                        {parseFloat(entryPrice) > quoteData.lastPrice
+                          ? '⬆ 突破價'
+                          : parseFloat(entryPrice) < quoteData.lastPrice
+                            ? '⬇ 限價'
+                            : '= 現價'}
+                      </p>
+                    )}
                     <input
                       type="number"
                       step="0.01"
@@ -1309,7 +1327,7 @@ export default function Home() {
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     {orderType === 'LIMIT' && '指定價格成交'}
-                    {orderType === 'STOP' && '突破觸發價自動成交'}
+                    {orderType === 'STOP' && '突破現價後自動以市價成交'}
                   </p>
                 </div>
 
@@ -1347,35 +1365,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 第三行：觸發價 (當選擇突破單時顯示) */}
-              {orderType === 'STOP' && (
-                <div>
-                  <label className="text-sm text-muted-foreground flex items-center gap-1">
-                    <span className="text-orange-400">⬆</span> 觸發價 (突破呢個價自動成交)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={triggerPrice}
-                    onChange={(e) => setTriggerPrice(e.target.value)}
-                    placeholder={direction === 'LONG' ? '高於現價 (突破買入)' : '低於現價 (突破賣出)'}
-                    className="w-full mt-1 px-4 py-2 bg-orange-500/10 border border-orange-500/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
-                  />
-                  {quoteData?.lastPrice && triggerPrice && (
-                    <p className={`text-xs mt-1 ${parseFloat(triggerPrice) > quoteData.lastPrice! ? 'text-orange-400' : 'text-muted-foreground'}`}>
-                      現價 ${quoteData.lastPrice.toFixed(2)} · 觸發價 ${parseFloat(triggerPrice)}
-                      {direction === 'LONG' 
-                        ? parseFloat(triggerPrice) > quoteData.lastPrice
-                          ? ' → 突破買入 ✓'
-                          : ' → 低於現價 (改為 LIMIT 單)'
-                        : parseFloat(triggerPrice) < quoteData.lastPrice
-                          ? ' → 突破賣出 ✓'
-                          : ' → 高於現價 (改為 LIMIT 單)'
-                      }
-                    </p>
-                  )}
-                </div>
-              )}
 
               {suggestedStopLoss && (
                 <p className="text-xs text-muted-foreground">
@@ -1677,15 +1666,16 @@ export default function Home() {
                     </span>
                   </div>
                   <div className="flex justify-between mb-2">
-                    <span className="text-muted-foreground">{direction === 'LONG' ? '買入價:' : '賣出價:'}</span>
-                    <span className="font-mono">${parseFloat(entryPrice).toFixed(2)}</span>
+                    <span className="text-muted-foreground">{direction === 'LONG' ? '買入' : '賣出'}價:</span>
+                    <span className={`font-mono ${quoteData?.lastPrice && entryPrice && parseFloat(entryPrice) > quoteData.lastPrice ? 'text-orange-400' : ''}`}>
+                      ${parseFloat(entryPrice).toFixed(2)}
+                      {quoteData?.lastPrice && entryPrice && (
+                        <span className="text-xs ml-1">
+                          ({parseFloat(entryPrice) > quoteData.lastPrice ? '突破' : parseFloat(entryPrice) < quoteData.lastPrice ? '限價' : '='})
+                        </span>
+                      )}
+                    </span>
                   </div>
-                  {orderType === 'STOP' && triggerPrice && (
-                    <div className="flex justify-between mb-2">
-                      <span className="text-orange-400">觸發價:</span>
-                      <span className="font-mono text-orange-400">${parseFloat(triggerPrice).toFixed(2)}</span>
-                    </div>
-                  )}
                   <div className="flex justify-between mb-2">
                     <span className="text-muted-foreground">股數:</span>
                     <span className={`font-mono ${direction === 'LONG' ? 'text-profit' : 'text-loss'}`}>{shares.toLocaleString()}</span>

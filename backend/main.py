@@ -1208,17 +1208,23 @@ def _place_order(
         
         # Determine order type
         # STOP order: 使用 trigger_price (Stop Entry 單)
-        if order_type.upper() == "STOP" and trigger_price:
+        # 如果有 trigger_price，即使 order_type 是 MARKET 也用 STOP 類型
+        if trigger_price:
             order_type_enum = futu.OrderType.STOP
-            # Stop Entry 單的 price = 0，trigger_price = 觸發價
-            price = 0
-            print(f"[Order] Using STOP order type with trigger_price=${trigger_price}")
+            # Stop Entry 單: aux_price = 觸發價, price = 執行價
+            # 如果是 MARKET，執行價設為 0（以市價成交）
+            if order_type.upper() == "MARKET":
+                price = 0  # 市價成交
+            else:
+                price = order_price  # 用戶指定的執行價
+            print(f"[Order] Using STOP order type with trigger_price=${trigger_price}, price=${price}")
         elif order_type.upper() == "MARKET":
             order_type_enum = futu.OrderType.MARKET
             # Market order uses 0 as price
             price = 0
         else:
             order_type_enum = futu.OrderType.NORMAL
+            price = order_price
 
         # Determine time_in_force
         if time_in_force.upper() == "GTC":
@@ -1246,11 +1252,11 @@ def _place_order(
             "time_in_force": time_in_force_enum,
         }
 
-        # 對於 STOP orders (Stop Entry / 突破單)：
-        # - price = 執行價 (entryPrice)
+        # 對於有 trigger_price 的訂單（Stop Entry / 突破單）：
         # - aux_price = 觸發價 (triggerPrice)
-        if order_type.upper() == "STOP" and trigger_price:
-            place_order_kwargs["price"] = price  # 執行價
+        # - price = 執行價（如果是 MARKET 則為 0）
+        if trigger_price:
+            place_order_kwargs["price"] = price  # 執行價（MARKET=0, 否則用戶指定）
             place_order_kwargs["aux_price"] = trigger_price  # 觸發價
             print(f"[Order] STOP order: price=${price}, aux_price=${trigger_price}")
 
