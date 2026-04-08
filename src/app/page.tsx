@@ -774,41 +774,31 @@ export default function Home() {
     setOrderResult(null)
 
     try {
-      // 自動判斷 order_type
-      // 如果有 trigger_price 且高於/低於現價，使用 STOP order
-      let effectiveOrderType = orderType
+      // 自動判斷 order_type：根據 entryPrice 與現價比較
       const currentPrice = quoteData?.lastPrice || 0
-      const triggerNum = parseFloat(triggerPrice) || 0
-      
-      if (triggerNum > 0 && currentPrice > 0) {
-        // 有 trigger_price，自動判斷係 STOP 還是 LIMIT
+      const entryNum = parseFloat(entryPrice)
+      let effectiveOrderType: 'LIMIT' | 'MARKET' | 'STOP' = 'LIMIT'
+      let triggerPriceToUse: number | undefined
+
+      if (entryNum > 0 && currentPrice > 0) {
         if (direction === 'LONG') {
-          // Long: trigger_price > 現價 = BUY STOP (突破買入)
-          //        trigger_price < 現價 = BUY LIMIT (低價買入)
-          if (triggerNum > currentPrice) {
+          // Long: entryPrice > 現價 = BUY STOP (突破買入)
+          if (entryNum > currentPrice) {
             effectiveOrderType = 'STOP'
-          } else {
-            effectiveOrderType = 'LIMIT'
+            triggerPriceToUse = entryNum
           }
         } else {
-          // Short: trigger_price < 現價 = SELL STOP (突破賣出)
-          //         trigger_price > 現價 = SELL LIMIT (高價賣出)
-          if (triggerNum < currentPrice) {
+          // Short: entryPrice < 現價 = SELL STOP (突破賣出)
+          if (entryNum < currentPrice) {
             effectiveOrderType = 'STOP'
-          } else {
-            effectiveOrderType = 'LIMIT'
+            triggerPriceToUse = entryNum
           }
         }
       }
 
       // 突破單觸發後以市價成交
-      let finalOrderType = effectiveOrderType
+      const finalOrderType = effectiveOrderType === 'STOP' ? 'MARKET' : effectiveOrderType
       let finalPrice = parseFloat(entryPrice)
-      
-      if (effectiveOrderType === 'STOP') {
-        finalOrderType = 'MARKET'  // 突破觸發後用市價
-        finalPrice = 0  // 市價不需要價格
-      }
 
       const response = await placeOrder({
         symbol: ticker.toUpperCase(),
@@ -818,7 +808,7 @@ export default function Home() {
         side: direction === 'LONG' ? 'BUY' : 'SELL',
         stop_loss_price: stopLoss ? parseFloat(stopLoss) : undefined,
         time_in_force: timeInForce,
-        trigger_price: triggerNum > 0 ? triggerNum : undefined,
+        trigger_price: triggerPriceToUse,
       })
 
       setOrderResult({
@@ -841,7 +831,7 @@ export default function Home() {
     }
     
     setOrdering(false)
-  }, [ticker, entryPrice, shares, direction, stopLoss, timeInForce, syncBrokerPositions, quoteData, orderType, triggerPrice])
+  }, [ticker, entryPrice, shares, direction, stopLoss, timeInForce, syncBrokerPositions, quoteData, triggerPrice])
   
   // Handle environment switch
   const handleEnvSwitch = useCallback(async (newEnv: 'SIMULATE' | 'REAL') => {
@@ -1246,6 +1236,14 @@ export default function Home() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-sm text-muted-foreground">觸發/限價 ($)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={entryPrice}
+                      onChange={(e) => setEntryPrice(e.target.value)}
+                      placeholder={direction === 'LONG' ? '買入' : '賣出'}
+                      className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                    />
                     {quoteData?.lastPrice && entryPrice && (
                       <p className={`text-xs mt-1 ${parseFloat(entryPrice) > quoteData.lastPrice ? 'text-orange-400' : 'text-muted-foreground'}`}>
                         {parseFloat(entryPrice) > quoteData.lastPrice
@@ -1255,14 +1253,6 @@ export default function Home() {
                             : '= 現價'}
                       </p>
                     )}
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={entryPrice}
-                      onChange={(e) => setEntryPrice(e.target.value)}
-                      placeholder={direction === 'LONG' ? '買入' : '賣出'}
-                      className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
-                    />
                   </div>
 
                   <div>
@@ -1291,50 +1281,10 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 第二行：訂單類型 | 訂單期限 */}
-              <div className="grid grid-cols-2 gap-4">
-                {/* 左邊：訂單類型 */}
-                <div>
-                  <label className="text-sm text-muted-foreground">訂單類型</label>
-                  <div className="flex gap-2 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOrderType('LIMIT')
-                        setTriggerPrice('')
-                      }}
-                      className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-                        orderType === 'LIMIT' && !triggerPrice
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-secondary border border-border hover:border-primary/50'
-                      }`}
-                    >
-                      限價單
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOrderType('STOP')
-                      }}
-                      className={`flex-1 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-                        orderType === 'STOP'
-                          ? 'bg-orange-500/20 text-orange-400 border border-orange-500/50'
-                          : 'bg-secondary border border-border hover:border-primary/50'
-                      }`}
-                    >
-                      突破單
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {orderType === 'LIMIT' && '指定價格成交'}
-                    {orderType === 'STOP' && '突破現價後自動以市價成交'}
-                  </p>
-                </div>
-
-                {/* 右邊：訂單期限 */}
-                <div>
-                  <label className="text-sm text-muted-foreground">訂單期限</label>
-                  <div className="flex gap-4 mt-1">
+              {/* 訂單期限 */}
+              <div>
+                <label className="text-sm text-muted-foreground">訂單期限</label>
+                <div className="flex gap-4 mt-1">
                     <button
                       type="button"
                       onClick={() => setTimeInForce('DAY')}
@@ -1363,15 +1313,12 @@ export default function Home() {
                     {timeInForce === 'GTC' && '直至主動撤單'}
                   </p>
                 </div>
-              </div>
-
-
-              {suggestedStopLoss && (
-                <p className="text-xs text-muted-foreground">
-                  建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
-                  {direction === 'SHORT' && <span className="text-loss ml-2">(止蝕喺上面)</span>}
-                </p>
-              )}
+                {suggestedStopLoss && (
+                  <p className="text-xs text-muted-foreground">
+                    建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
+                    {direction === 'SHORT' && <span className="text-loss ml-2">(止蝕喺上面)</span>}
+                  </p>
+                )}
               
               {/* Risk Info */}
               <div className="bg-secondary/50 rounded-lg p-4">
@@ -1661,8 +1608,8 @@ export default function Home() {
                   </div>
                   <div className="flex justify-between mb-2">
                     <span className="text-muted-foreground">訂單類型:</span>
-                    <span className={`font-mono ${orderType === 'STOP' ? 'text-orange-400' : ''}`}>
-                      {orderType === 'LIMIT' ? '限價單' : orderType === 'STOP' ? '突破單' : orderType}
+                    <span className={`font-mono ${quoteData?.lastPrice && entryPrice && parseFloat(entryPrice) > quoteData.lastPrice ? 'text-orange-400' : ''}`}>
+                      {quoteData?.lastPrice && entryPrice && parseFloat(entryPrice) > quoteData.lastPrice ? '突破單' : '限價單'}
                     </span>
                   </div>
                   <div className="flex justify-between mb-2">
