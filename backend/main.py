@@ -1223,7 +1223,7 @@ def _place_order(
             # Market order uses 0 as price
             price = 0
         else:
-            order_type_enum = futu.OrderType.LIMIT
+            order_type_enum = futu.OrderType.ABSOLUTE_LIMIT
             price = order_price
 
         # Determine time_in_force
