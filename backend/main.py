@@ -1223,8 +1223,14 @@ def _place_order(
             # Market order uses 0 as price
             price = 0
         else:
-            order_type_enum = futu.OrderType.ABSOLUTE_LIMIT
-            # price 保持不變（已在前面設定）
+            # 美股不支持 ABSOLUTE_LIMIT，如果是 LIMIT 单则改为 MARKET
+            if market == futu.TrdMarket.US:
+                order_type_enum = futu.OrderType.MARKET
+                price = 0
+                print(f"[Order] US stock LIMIT -> MARKET (US stocks don't support LIMIT orders)")
+            else:
+                order_type_enum = futu.OrderType.ABSOLUTE_LIMIT
+                # price 保持不變（已在前面設定）
 
         # Determine time_in_force
         if time_in_force.upper() == "GTC":
