@@ -43,6 +43,9 @@ interface Settings {
   atrPeriod: number
 }
 
+// Default ATR multiplier
+const DEFAULT_ATR_MULTIPLIER = 1.5
+
 // Data source switcher component
 // R-multiples visualization
 function RMultiplierBar({ 
@@ -443,7 +446,7 @@ export default function Home() {
   const [settings, setSettings] = useState<Settings>({
     accountSize: 100000,
     defaultRiskPercent: 0.3,
-    atrMultiplier: 1.5,
+    atrMultiplier: DEFAULT_ATR_MULTIPLIER,
     atrPeriod: 14
   })
   // Hydration fix: defer all client-side logic
@@ -562,19 +565,19 @@ export default function Home() {
   // Handle chart click - set entry price and auto-calculate stop loss
   const handleChartClick = useCallback((price: number) => {
     setEntryPrice(price.toFixed(2))
+    // Reset ATR multiplier to default when setting new entry price
+    setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER }))
     // Auto calculate stop loss based on ATR and direction
     if (atr) {
       if (direction === 'LONG') {
-        // Long: 止蝕喺下面
-        const stopLossPrice = price - atr * settings.atrMultiplier
+        const stopLossPrice = price - atr * DEFAULT_ATR_MULTIPLIER
         setStopLoss(stopLossPrice.toFixed(2))
       } else {
-        // Short: 止蝕喺上面
-        const stopLossPrice = price + atr * settings.atrMultiplier
+        const stopLossPrice = price + atr * DEFAULT_ATR_MULTIPLIER
         setStopLoss(stopLossPrice.toFixed(2))
       }
     }
-  }, [atr, settings.atrMultiplier, direction])
+  }, [atr, direction])
   
   // Initialize API connection
   useEffect(() => {
@@ -1146,36 +1149,36 @@ export default function Home() {
                   <div className="flex gap-4 text-sm flex-wrap">
                     <div>
                       <span className="text-muted-foreground">EMA10: </span>
-                      <button 
+                      <button
                         type="button"
-                        onClick={() => { const v = quoteData.ema10; if (v != null) { setEntryPrice(v.toFixed(2)); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * settings.atrMultiplier).toFixed(2) : (v + atr * settings.atrMultiplier).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.ema10; if (v != null) { setEntryPrice(v.toFixed(2)); setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER })); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * DEFAULT_ATR_MULTIPLIER).toFixed(2) : (v + atr * DEFAULT_ATR_MULTIPLIER).toFixed(2)); } }}
                         className="font-mono text-cyan-400 hover:underline cursor-pointer"
                         title="Set as entry price with ATR stop"
                       >${quoteData.ema10?.toFixed(2) || 'N/A'}</button>
                     </div>
                     <div>
                       <span className="text-muted-foreground">EMA20: </span>
-                      <button 
+                      <button
                         type="button"
-                        onClick={() => { const v = quoteData.ema20; if (v != null) { setEntryPrice(v.toFixed(2)); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * settings.atrMultiplier).toFixed(2) : (v + atr * settings.atrMultiplier).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.ema20; if (v != null) { setEntryPrice(v.toFixed(2)); setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER })); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * DEFAULT_ATR_MULTIPLIER).toFixed(2) : (v + atr * DEFAULT_ATR_MULTIPLIER).toFixed(2)); } }}
                         className="font-mono text-orange-400 hover:underline cursor-pointer"
                         title="Set as entry price with ATR stop"
                       >${quoteData.ema20?.toFixed(2) || 'N/A'}</button>
                     </div>
                     <div>
                       <span className="text-muted-foreground">SMA50: </span>
-                      <button 
+                      <button
                         type="button"
-                        onClick={() => { const v = quoteData.sma50; if (v != null) { setEntryPrice(v.toFixed(2)); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * settings.atrMultiplier).toFixed(2) : (v + atr * settings.atrMultiplier).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.sma50; if (v != null) { setEntryPrice(v.toFixed(2)); setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER })); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * DEFAULT_ATR_MULTIPLIER).toFixed(2) : (v + atr * DEFAULT_ATR_MULTIPLIER).toFixed(2)); } }}
                         className="font-mono text-blue-400 hover:underline cursor-pointer"
                         title="Set as entry price with ATR stop"
                       >${quoteData.sma50?.toFixed(2) || 'N/A'}</button>
                     </div>
                     <div>
                       <span className="text-muted-foreground">SMA200: </span>
-                      <button 
+                      <button
                         type="button"
-                        onClick={() => { const v = quoteData.sma200; if (v != null) { setEntryPrice(v.toFixed(2)); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * settings.atrMultiplier).toFixed(2) : (v + atr * settings.atrMultiplier).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.sma200; if (v != null) { setEntryPrice(v.toFixed(2)); setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER })); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * DEFAULT_ATR_MULTIPLIER).toFixed(2) : (v + atr * DEFAULT_ATR_MULTIPLIER).toFixed(2)); } }}
                         className="font-mono text-purple-400 hover:underline cursor-pointer"
                         title="Set as entry price with ATR stop"
                       >${quoteData.sma200?.toFixed(2) || 'N/A'}</button>
