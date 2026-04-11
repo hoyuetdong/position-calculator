@@ -232,9 +232,14 @@ export default function CandlestickChart({
       }
     }
 
-    // 用 stopLine.lastValue() 獲取止蝕價，唔需要額外 ref
+    // 用 stopLine.data() 獲取止蝕價（止蝕線係水平線，所有點值都一樣）
     const getStopLossPrice = (): number | undefined => {
-      return seriesRef.current.stopLine?.lastValue()?.value;
+      const data = seriesRef.current.stopLine?.data();
+      if (data && data.length > 0) {
+        const lastPoint = data[data.length - 1];
+        return (lastPoint as { value?: number })?.value ?? undefined;
+      }
+      return undefined;
     }
 
     chart.subscribeClick((param: MouseEventParams) => {
