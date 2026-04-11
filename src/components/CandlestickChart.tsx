@@ -268,19 +268,28 @@ export default function CandlestickChart({
         const stopPrice = getStopLossPrice();
         if (stopPrice !== undefined) {
           const stopYCoordinate = stopLine.priceToCoordinate(stopPrice);
-          if (stopYCoordinate !== null && Math.abs(y - stopYCoordinate) < 15) {
-            dragStateRef.current.isDragging = true;
-            dragStateRef.current.dragLine = 'stopLine';
-            container.style.cursor = 'ns-resize';
-            e.preventDefault();
-            e.stopPropagation();
-            return;
+          if (stopYCoordinate !== null) {
+            // 根據 chart height 動態調整感應範圍
+            const chartHeight = rect.height;
+            const hitThreshold = Math.max(10, Math.min(20, chartHeight / 30));
+            
+            if (Math.abs(y - stopYCoordinate) < hitThreshold) {
+              dragStateRef.current.isDragging = true;
+              dragStateRef.current.dragLine = 'stopLine';
+              container.style.cursor = 'ns-resize';
+              e.preventDefault();
+              // 重要：呢度唔 stopPropagation，等 chart 可以正常處理 crosshair 同 zoom
+              return;
+            }
           }
         }
       }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      // 呢度唔用 e.stopPropagation()，因為 lightweight-charts 需要接收 mouse events 嚟處理 crosshair
+      // 但係我哋需要確保止蝕線拖動時坐標計算係正確嘅
+      
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
       
@@ -293,16 +302,21 @@ export default function CandlestickChart({
         return;
       }
       
-      // 顯示 cursor 變化
-      if (seriesRef.current.stopLine) {
-        const stopLine = seriesRef.current.stopLine;
+      // 顯示 cursor 變化 - 用 chart.getPriceScale().getPriceRange() 計算合理感應範圍
+      if (seriesRef.current.stopLine && candlestickSeriesRef.current) {
         const stopPrice = getStopLossPrice();
         if (stopPrice !== undefined) {
-          const stopY = stopLine.priceToCoordinate(stopPrice);
-          if (stopY !== null && Math.abs(y - stopY) < 15) {
-            container.style.cursor = 'ns-resize';
-          } else {
-            container.style.cursor = 'crosshair';
+          const stopY = seriesRef.current.stopLine.priceToCoordinate(stopPrice);
+          if (stopY !== null) {
+            // 根據當前 chart height 計算感應範圍（chart height 細，範圍大啲；chart height 大，範圍細啲）
+            const chartHeight = rect.height;
+            const hitThreshold = Math.max(10, Math.min(20, chartHeight / 30));
+            
+            if (Math.abs(y - stopY) < hitThreshold) {
+              container.style.cursor = 'ns-resize';
+            } else {
+              container.style.cursor = 'crosshair';
+            }
           }
         } else {
           container.style.cursor = 'crosshair';
