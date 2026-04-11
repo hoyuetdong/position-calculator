@@ -40,6 +40,7 @@ interface Settings {
   accountSize: number
   defaultRiskPercent: number
   atrMultiplier: number
+  atrPeriod: number
 }
 
 // Data source switcher component
@@ -442,7 +443,8 @@ export default function Home() {
   const [settings, setSettings] = useState<Settings>({
     accountSize: 100000,
     defaultRiskPercent: 0.3,
-    atrMultiplier: 1.5
+    atrMultiplier: 1.5,
+    atrPeriod: 14
   })
   // Hydration fix: defer all client-side logic
   const [hydrated, setHydrated] = useState(false)
@@ -634,15 +636,16 @@ export default function Home() {
           
           // Calculate ATR
           let calculatedAtr: number | null = null
-          if (klines.length >= 14) {
-            const atrData = klines.slice(-14).map((k: any) => {
+          const atrPeriod = settings.atrPeriod || 14
+          if (klines.length >= atrPeriod) {
+            const atrData = klines.slice(-atrPeriod).map((k: any) => {
               const high = parseFloat(k.high)
               const low = parseFloat(k.low)
               const close = parseFloat(k.close)
               const tr = Math.max(high - low, Math.abs(high - close), Math.abs(low - close))
               return tr
             })
-            calculatedAtr = atrData.reduce((a: number, b: number) => a + b, 0) / 14
+            calculatedAtr = atrData.reduce((a: number, b: number) => a + b, 0) / atrPeriod
           }
           setAtr(calculatedAtr)
           
@@ -661,7 +664,23 @@ export default function Home() {
     
     const timer = setTimeout(fetchData, 500)
     return () => clearTimeout(timer)
-  }, [ticker, dataSource])
+  }, [ticker, dataSource, settings.atrPeriod])
+
+  // 當 ATR 週期改變時，重新計算 ATR（如果有歷史數據）
+  useEffect(() => {
+    if (historicalData.length > 0 && settings.atrPeriod) {
+      const atrPeriod = settings.atrPeriod
+      if (historicalData.length >= atrPeriod) {
+        const lastKlines = historicalData.slice(-atrPeriod)
+        const atrData = lastKlines.map((k) => {
+          const tr = Math.max(k.high - k.low, Math.abs(k.high - k.close), Math.abs(k.low - k.close))
+          return tr
+        })
+        const calculatedAtr = atrData.reduce((a, b) => a + b, 0) / atrPeriod
+        setAtr(calculatedAtr)
+      }
+    }
+  }, [settings.atrPeriod])
   
   // Calculations（避免 NaN：空字串當 0）
   const entryNum = parseFloat(entryPrice) || 0
@@ -1066,6 +1085,17 @@ export default function Home() {
                 <option value="3">3</option>
               </select>
             </div>
+            <div>
+              <label className="text-sm text-muted-foreground">ATR 週期</label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={settings.atrPeriod}
+                onChange={(e) => setSettings({ ...settings, atrPeriod: Math.max(1, Math.min(100, parseInt(e.target.value) || 14)) })}
+                className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
           </div>
         </div>
       )}
@@ -1094,7 +1124,7 @@ export default function Home() {
                 </div>
                 <div className="mt-4 flex gap-4 text-sm">
                   <div>
-                    <span className="text-muted-foreground">ATR (14): </span>
+                    <span className="text-muted-foreground">ATR ({settings.atrPeriod}): </span>
                     <span className="text-primary font-mono">${atr?.toFixed(2) || 'N/A'}</span>
                   </div>
                   <div>
@@ -1164,8 +1194,10 @@ export default function Home() {
                       stopLoss={stopLoss ? parseFloat(stopLoss) : undefined}
                       atr={atr}
                       atrMultiplier={settings.atrMultiplier}
+                      atrPeriod={settings.atrPeriod}
                       onEntryPriceChange={handleChartClick}
                       onStopLossChange={(price) => setStopLoss(price.toFixed(2))}
+                      onAtrMultiplierChange={(multiplier) => setSettings(prev => ({ ...prev, atrMultiplier: multiplier }))}
                     />
                   </div>
                 )}

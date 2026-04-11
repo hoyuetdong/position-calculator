@@ -16,8 +16,10 @@ interface ChartProps {
   stopLoss?: number
   atr?: number | null
   atrMultiplier?: number
+  atrPeriod?: number
   onEntryPriceChange?: (price: number) => void  // 改名
   onStopLossChange?: (price: number) => void
+  onAtrMultiplierChange?: (multiplier: number) => void  // 拖曳止蝕線後自動計算新 ATR 倍數
 }
 
 // Calculate EMA for entire array
@@ -69,8 +71,10 @@ export default function CandlestickChart({
   stopLoss,
   atr, 
   atrMultiplier = 1.5,
+  atrPeriod = 14,
   onEntryPriceChange, 
-  onStopLossChange 
+  onStopLossChange,
+  onAtrMultiplierChange
 }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -86,7 +90,15 @@ export default function CandlestickChart({
   // 用ref去store latest atr同atrMultiplier，等click handler可以access到最新值
   const atrRef = useRef(atr)
   const atrMultiplierRef = useRef(atrMultiplier)
+  const atrPeriodRef = useRef(atrPeriod)
   const directionRef = useRef(direction)
+  const onAtrMultiplierChangeRef = useRef(onAtrMultiplierChange)
+  const entryPriceRef = useRef(entryPrice)
+  const onStopLossChangeRef = useRef(onStopLossChange)
+  
+  // 拖曳狀態
+  const isDraggingRef = useRef(false)
+  const dragLineRef = useRef<'stopLine' | null>(null)
   
   useEffect(() => {
     atrRef.current = atr
@@ -99,6 +111,22 @@ export default function CandlestickChart({
   useEffect(() => {
     directionRef.current = direction
   }, [direction])
+
+  useEffect(() => {
+    atrPeriodRef.current = atrPeriod
+  }, [atrPeriod])
+
+  useEffect(() => {
+    onAtrMultiplierChangeRef.current = onAtrMultiplierChange
+  }, [onAtrMultiplierChange])
+
+  useEffect(() => {
+    entryPriceRef.current = entryPrice
+  }, [entryPrice])
+
+  useEffect(() => {
+    onStopLossChangeRef.current = onStopLossChange
+  }, [onStopLossChange])
 
   // Initialize chart
   useEffect(() => {
@@ -300,19 +328,91 @@ export default function CandlestickChart({
       if (priceAtClick !== null && !isNaN(priceAtClick)) {
         onEntryPriceChange(priceAtClick);
         
-        if (atrRef.current && onStopLossChange) {
+        if (atrRef.current && onStopLossChangeRef.current) {
           if (directionRef.current === 'LONG') {
             // Long: 止蝕喺下面
             const stopLossPrice = priceAtClick - (atrRef.current * atrMultiplierRef.current);
-            onStopLossChange(stopLossPrice);
+            onStopLossChangeRef.current(stopLossPrice);
           } else {
             // Short: 止蝕喺上面
             const stopLossPrice = priceAtClick + (atrRef.current * atrMultiplierRef.current);
-            onStopLossChange(stopLossPrice);
+            onStopLossChangeRef.current(stopLossPrice);
           }
         }
       }
     })
+
+    // 止蝕線拖曳功能
+    const container = chartContainerRef.current;
+    let isDragging = false;
+    let dragLine: 'stopLine' | null = null;
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (!candlestickSeriesRef.current || !atrRef.current || !entryPriceRef.current) return;
+      
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      // 檢查係咪點擊喺止蝕線附近（5px 範圍內）
+      if (seriesRef.current.stopLine) {
+        const stopY = seriesRef.current.stopLine.coordinateToPrice(
+          seriesRef.current.stopLine.priceToCoordinate(stopLoss || 0)
+        );
+        if (stopY !== null && Math.abs(y - stopY) < 10) {
+          isDragging = true;
+          dragLine = 'stopLine';
+          e.preventDefault();
+        }
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging || !candlestickSeriesRef.current || !seriesRef.current.stopLine) return;
+      
+      const rect = container.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      
+      const newPrice = candlestickSeriesRef.current.coordinateToPrice(y);
+      if (newPrice !== null && !isNaN(newPrice)) {
+        // 更新止蝕線位置
+        if (onStopLossChangeRef.current) {
+          onStopLossChangeRef.current(newPrice);
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (isDragging && dragLine === 'stopLine' && atrRef.current && entryPriceRef.current && onAtrMultiplierChangeRef.current) {
+        // 拖曳完成，計算新嘅 ATR 倍數
+        const currentStopLoss = stopLoss;
+        if (currentStopLoss && atrRef.current > 0) {
+          let newMultiplier: number;
+          if (directionRef.current === 'LONG') {
+            newMultiplier = (entryPriceRef.current - currentStopLoss) / atrRef.current;
+          } else {
+            newMultiplier = (currentStopLoss - entryPriceRef.current) / atrRef.current;
+          }
+          // 四捨五入到小數點後一位
+          newMultiplier = Math.round(newMultiplier * 10) / 10;
+          // 限制喺合理範圍內 (0.1 - 10)
+          newMultiplier = Math.max(0.1, Math.min(10, newMultiplier));
+          onAtrMultiplierChangeRef.current(newMultiplier);
+        }
+      }
+      isDragging = false;
+      dragLine = null;
+    };
+
+    container.addEventListener('mousedown', handleMouseDown);
+    container.addEventListener('mousemove', handleMouseMove);
+    container.addEventListener('mouseup', handleMouseUp);
+    container.addEventListener('mouseleave', handleMouseUp);
+
+    container.addEventListener('mousedown', handleMouseDown);
+    container.addEventListener('mousemove', handleMouseMove);
+    container.addEventListener('mouseup', handleMouseUp);
+    container.addEventListener('mouseleave', handleMouseUp);
 
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
@@ -323,6 +423,10 @@ export default function CandlestickChart({
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      container.removeEventListener('mousedown', handleMouseDown);
+      container.removeEventListener('mousemove', handleMouseMove);
+      container.removeEventListener('mouseup', handleMouseUp);
+      container.removeEventListener('mouseleave', handleMouseUp);
       try {
         if (chartRef.current) {
           chartRef.current.remove()
@@ -366,15 +470,43 @@ export default function CandlestickChart({
     if (stopLoss) {
       const stopLine = chartRef.current.addSeries(LineSeries, {
         color: '#ffaa00',
-        lineWidth: 2,
-        lineStyle: 2,
+        lineWidth: 3,
+        lineStyle: 0,
         priceLineVisible: false,
-        lastValueVisible: false,
+        lastValueVisible: true,
+        title: '止蝕',
       })
       stopLine.setData(data.map(d => ({ time: d.time as any, value: stopLoss })))
       seriesRef.current.stopLine = stopLine
     }
   }, [entryPrice, stopLoss, direction, data])
+
+  // 滑鼠喺止蝕線上時顯示 grab cursor
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!candlestickSeriesRef.current) return;
+      
+      const rect = container.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      
+      if (seriesRef.current.stopLine && stopLoss) {
+        const stopY = seriesRef.current.stopLine.priceToCoordinate(stopLoss);
+        if (Math.abs(y - stopY) < 10) {
+          container.style.cursor = 'ns-resize';
+        } else {
+          container.style.cursor = 'crosshair';
+        }
+      } else {
+        container.style.cursor = 'crosshair';
+      }
+    };
+
+    container.addEventListener('mousemove', handleMouseMove);
+    return () => container.removeEventListener('mousemove', handleMouseMove);
+  }, [stopLoss]);
 
   return <div ref={chartContainerRef} className="w-full h-[300px]" />
 }
