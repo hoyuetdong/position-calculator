@@ -354,8 +354,8 @@ export default function CandlestickChart({
       const y = e.clientY - rect.top;
       
       // 檢查係咪點擊喺止蝕線附近（10px 範圍內）
-      if (seriesRef.current.stopLine && stopLoss && chartRef.current) {
-        const stopYCoordinate = chartRef.current.priceToCoordinate(stopLoss, seriesRef.current.stopLine);
+      if (seriesRef.current.stopLine && stopLoss) {
+        const stopYCoordinate = seriesRef.current.stopLine.priceToCoordinate(stopLoss);
         if (stopYCoordinate !== null && Math.abs(y - stopYCoordinate) < 10) {
           isDragging = true;
           dragLine = 'stopLine';
@@ -486,7 +486,7 @@ export default function CandlestickChart({
       
       if (seriesRef.current.stopLine && stopLoss) {
         const stopY = seriesRef.current.stopLine.priceToCoordinate(stopLoss);
-        if (Math.abs(y - stopY) < 10) {
+        if (stopY !== null && Math.abs(y - stopY) < 10) {
           container.style.cursor = 'ns-resize';
         } else {
           container.style.cursor = 'crosshair';
