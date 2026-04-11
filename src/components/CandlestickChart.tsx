@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { createChart, ColorType, CrosshairMode, CandlestickSeries, LineSeries, IChartApi, ISeriesApi, MouseEventParams } from 'lightweight-charts'
 
 interface ChartProps {
@@ -101,11 +101,6 @@ export default function CandlestickChart({
     isDragging: boolean
     dragLine: 'stopLine' | null
   }>({ isDragging: false, dragLine: null })
-
-  // 止蝕線手柄位置（同時用於 DOM 渲染）
-  const [handlePosition, setHandlePosition] = useState<{ x: number; y: number } | null>(null)
-  const [isHandleVisible, setIsHandleVisible] = useState(false)
-  const [isDraggingHandle, setIsDraggingHandle] = useState(false)
   
   useEffect(() => {
     atrRef.current = atr
@@ -267,25 +262,6 @@ export default function CandlestickChart({
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
 
-      // 檢查是否點擊止蝕線手柄
-      if (handlePosition && isHandleVisible) {
-        const handleRadius = 10;
-        const handleX = rect.width - 10; // 手柄喺右側
-        const handleY = handlePosition.y;
-
-        const distToHandle = Math.sqrt(Math.pow(e.clientX - rect.left - handleX, 2) + Math.pow(y - handleY, 2));
-
-        if (distToHandle < handleRadius + 5) {
-          dragStateRef.current.isDragging = true;
-          dragStateRef.current.dragLine = 'stopLine';
-          setIsDraggingHandle(true);
-          container.style.cursor = 'grabbing';
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
-      }
-
       // 先檢查止蝕線拖曳 - 用 stopLine.lastValue() 獲取止蝕價
       if (seriesRef.current.stopLine) {
         const stopLine = seriesRef.current.stopLine;
@@ -313,20 +289,11 @@ export default function CandlestickChart({
     const handleMouseMove = (e: MouseEvent) => {
       // 呢度唔用 e.stopPropagation()，因為 lightweight-charts 需要接收 mouse events 嚟處理 crosshair
       // 但係我哋需要確保止蝕線拖動時坐標計算係正確嘅
-      
+
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
-      
-      // 如果係拖緊止蝕線手柄，直接用 actual 鼠標 Y 座標更新
-      if (isDraggingHandle && candlestickSeriesRef.current) {
-        const newPrice = candlestickSeriesRef.current.coordinateToPrice(y);
-        if (newPrice !== null && !isNaN(newPrice) && onStopLossChangeRef.current) {
-          onStopLossChangeRef.current(newPrice);
-        }
-        return;
-      }
-      
-      // 如果係拖緊止蝕線（原有方式）
+
+      // 如果係拖緊止蝕線，直接用 actual 鼠標 Y 座標更新
       if (dragStateRef.current.isDragging && dragStateRef.current.dragLine === 'stopLine' && candlestickSeriesRef.current) {
         const newPrice = candlestickSeriesRef.current.coordinateToPrice(y);
         if (newPrice !== null && !isNaN(newPrice) && onStopLossChangeRef.current) {
@@ -334,49 +301,33 @@ export default function CandlestickChart({
         }
         return;
       }
-      
-      // 更新手柄位置同可見性
+
+      // 顯示 cursor 變化 - 根據當前顯示的價格範圍動態計算感應範圍
       if (seriesRef.current.stopLine && candlestickSeriesRef.current) {
         const stopPrice = getStopLossPrice();
         if (stopPrice !== undefined) {
           const stopY = seriesRef.current.stopLine.priceToCoordinate(stopPrice);
           if (stopY !== null) {
-            setHandlePosition({ x: rect.width, y: stopY });
-            setIsHandleVisible(true);
-            
-            // 顯示 cursor 變化 - 根據當前顯示的價格範圍動態計算感應範圍
             const chartHeight = rect.height;
             const hitThreshold = Math.max(15, Math.min(40, chartHeight / 10));
-            
-            // 檢查係咪接近止蝕線或者手柄
-            const handleRadius = 10;
-            const handleX = rect.width - 10;
-            const distToHandle = Math.sqrt(Math.pow(e.clientX - rect.left - handleX, 2) + Math.pow(y - stopY, 2));
-            const isNearLine = Math.abs(y - stopY) < hitThreshold;
-            const isNearHandle = distToHandle < handleRadius + 5;
-            
-            if (isNearLine || isNearHandle) {
-              container.style.cursor = 'grab';
+
+            if (Math.abs(y - stopY) < hitThreshold) {
+              container.style.cursor = 'ns-resize';
             } else {
               container.style.cursor = 'crosshair';
             }
-          } else {
-            setIsHandleVisible(false);
-            container.style.cursor = 'crosshair';
           }
         } else {
-          setIsHandleVisible(false);
           container.style.cursor = 'crosshair';
         }
       } else {
-        setIsHandleVisible(false);
         container.style.cursor = 'crosshair';
       }
     };
 
     const handleMouseUp = () => {
-      // 計算新 ATR 倍數（如果係通過手柄拖動）
-      if ((dragStateRef.current.isDragging || isDraggingHandle) && dragStateRef.current.dragLine === 'stopLine' &&
+      // 計算新 ATR 倍數
+      if (dragStateRef.current.isDragging && dragStateRef.current.dragLine === 'stopLine' &&
           atrRef.current && entryPriceRef.current && onAtrMultiplierChangeRef.current) {
         const currentStopLoss = getStopLossPrice();
         if (currentStopLoss && atrRef.current > 0) {
@@ -393,7 +344,6 @@ export default function CandlestickChart({
       }
       dragStateRef.current.isDragging = false;
       dragStateRef.current.dragLine = null;
-      setIsDraggingHandle(false);
       container.style.cursor = 'crosshair';
     };
 
@@ -467,34 +417,41 @@ export default function CandlestickChart({
     }
   }, [entryPrice, stopLoss, direction, data])
 
+  // 微調止蝕價（每次 1%）
+  const adjustStopLoss = (deltaPercent: number) => {
+    if (!stopLoss || !onStopLossChange) return;
+    const newPrice = stopLoss * (1 + deltaPercent / 100);
+    onStopLossChange(newPrice);
+  };
+
   return (
     <div className="w-full h-[300px] relative">
       <div ref={chartContainerRef} className="w-full h-full" />
 
-      {/* 止蝕線拖曳手柄 - mouseover 止蝕線時顯示 */}
-      {isHandleVisible && handlePosition && (
+      {/* 止蝕價浮動工具欄 */}
+      {stopLoss && (
         <div
-          className="absolute w-4 h-4 rounded-full bg-[#ffaa00] border-2 border-white shadow-lg cursor-grab hover:scale-110 transition-transform"
-          style={{
-            right: '30px',
-            top: `${handlePosition.y - 8}px`,
-            zIndex: 10,
-          }}
-          title="拖動調整止蝕價"
-        />
-      )}
-
-      {/* 止蝕線價格標籤 */}
-      {isHandleVisible && handlePosition && stopLoss && (
-        <div
-          className="absolute bg-[#ffaa00] text-black text-xs px-2 py-1 rounded font-mono whitespace-nowrap shadow-lg"
-          style={{
-            right: '60px',
-            top: `${handlePosition.y - 12}px`,
-            zIndex: 10,
-          }}
+          className="absolute right-2 top-2 bg-[#1a1a1a]/90 border border-[#ffaa00] rounded-lg px-3 py-2 flex flex-col items-center gap-1 shadow-lg z-10"
+          style={{ minWidth: '80px' }}
         >
-          止蝕: ${stopLoss.toFixed(2)}
+          <span className="text-[#ffaa00] text-xs font-bold">止蝕價</span>
+          <span className="text-white text-sm font-mono">${stopLoss.toFixed(2)}</span>
+          <div className="flex gap-1 mt-1">
+            <button
+              onClick={() => adjustStopLoss(-1)}
+              className="w-7 h-7 bg-[#333] hover:bg-[#444] text-[#ffaa00] rounded text-lg font-bold flex items-center justify-center transition-colors"
+              title="減 $1"
+            >
+              −
+            </button>
+            <button
+              onClick={() => adjustStopLoss(1)}
+              className="w-7 h-7 bg-[#333] hover:bg-[#444] text-[#00ff88] rounded text-lg font-bold flex items-center justify-center transition-colors"
+              title="加 $1"
+            >
+              +
+            </button>
+          </div>
         </div>
       )}
     </div>
