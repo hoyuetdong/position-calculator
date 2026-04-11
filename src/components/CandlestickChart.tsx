@@ -359,23 +359,35 @@ export default function CandlestickChart({
         if (stopYCoordinate !== null && Math.abs(y - stopYCoordinate) < 10) {
           isDragging = true;
           dragLine = 'stopLine';
+          container.style.cursor = 'ns-resize'; // 立即 set cursor
           e.preventDefault();
         }
       }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging || !candlestickSeriesRef.current || !seriesRef.current.stopLine) return;
-      
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
       
-      const newPrice = candlestickSeriesRef.current.coordinateToPrice(y);
-      if (newPrice !== null && !isNaN(newPrice)) {
-        // 更新止蝕線位置
-        if (onStopLossChangeRef.current) {
+      // 如果係拖緊，直接更新止蝕線位置
+      if (isDragging && candlestickSeriesRef.current) {
+        const newPrice = candlestickSeriesRef.current.coordinateToPrice(y);
+        if (newPrice !== null && !isNaN(newPrice) && onStopLossChangeRef.current) {
           onStopLossChangeRef.current(newPrice);
         }
+        return;
+      }
+      
+      // 如果唔係拖緊，檢查 cursor 位置
+      if (seriesRef.current.stopLine && stopLoss) {
+        const stopY = seriesRef.current.stopLine.priceToCoordinate(stopLoss);
+        if (stopY !== null && Math.abs(y - stopY) < 10) {
+          container.style.cursor = 'ns-resize';
+        } else {
+          container.style.cursor = 'crosshair';
+        }
+      } else {
+        container.style.cursor = 'crosshair';
       }
     };
 
@@ -399,6 +411,7 @@ export default function CandlestickChart({
       }
       isDragging = false;
       dragLine = null;
+      container.style.cursor = 'crosshair';
     };
 
     container.addEventListener('mousedown', handleMouseDown);
@@ -472,33 +485,6 @@ export default function CandlestickChart({
       seriesRef.current.stopLine = stopLine
     }
   }, [entryPrice, stopLoss, direction, data])
-
-  // 滑鼠喺止蝕線上時顯示 grab cursor
-  useEffect(() => {
-    const container = chartContainerRef.current;
-    if (!container) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!candlestickSeriesRef.current) return;
-      
-      const rect = container.getBoundingClientRect();
-      const y = e.clientY - rect.top;
-      
-      if (seriesRef.current.stopLine && stopLoss) {
-        const stopY = seriesRef.current.stopLine.priceToCoordinate(stopLoss);
-        if (stopY !== null && Math.abs(y - stopY) < 10) {
-          container.style.cursor = 'ns-resize';
-        } else {
-          container.style.cursor = 'crosshair';
-        }
-      } else {
-        container.style.cursor = 'crosshair';
-      }
-    };
-
-    container.addEventListener('mousemove', handleMouseMove);
-    return () => container.removeEventListener('mousemove', handleMouseMove);
-  }, [stopLoss]);
 
   return <div ref={chartContainerRef} className="w-full h-[300px]" />
 }
