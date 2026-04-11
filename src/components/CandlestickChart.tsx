@@ -269,9 +269,19 @@ export default function CandlestickChart({
         if (stopPrice !== undefined) {
           const stopYCoordinate = stopLine.priceToCoordinate(stopPrice);
           if (stopYCoordinate !== null) {
-            // 根據 chart height 動態調整感應範圍
-            const chartHeight = rect.height;
-            const hitThreshold = Math.max(10, Math.min(20, chartHeight / 30));
+            // 根據當前顯示的價格範圍動態計算感應範圍（解決 zoom in 後止蝕線難拖動的問題）
+            const priceRange = chartRef.current?.getPriceScale().getPriceRange();
+            let hitThreshold = 10; // 預設最小感應範圍
+            
+            if (priceRange && priceRange.minPrice !== undefined && priceRange.maxPrice !== undefined) {
+              const priceSpan = priceRange.maxPrice - priceRange.minPrice;
+              // 使用 2% 的價格範圍作為感應範圍，確保 zoom in 之後仍然可以輕易抓到止蝕線
+              const hitRange = priceSpan * 0.02;
+              // 將價格範圍轉換為像素距離
+              hitThreshold = Math.abs(stopLine.priceToCoordinate(stopPrice - hitRange) - stopYCoordinate);
+              // 限制範圍在 10-40 像素之間
+              hitThreshold = Math.max(10, Math.min(40, hitThreshold));
+            }
             
             if (Math.abs(y - stopYCoordinate) < hitThreshold) {
               dragStateRef.current.isDragging = true;
@@ -302,15 +312,22 @@ export default function CandlestickChart({
         return;
       }
       
-      // 顯示 cursor 變化 - 用 chart.getPriceScale().getPriceRange() 計算合理感應範圍
+      // 顯示 cursor 變化 - 根據當前顯示的價格範圍動態計算感應範圍
       if (seriesRef.current.stopLine && candlestickSeriesRef.current) {
         const stopPrice = getStopLossPrice();
         if (stopPrice !== undefined) {
           const stopY = seriesRef.current.stopLine.priceToCoordinate(stopPrice);
           if (stopY !== null) {
-            // 根據當前 chart height 計算感應範圍（chart height 細，範圍大啲；chart height 大，範圍細啲）
-            const chartHeight = rect.height;
-            const hitThreshold = Math.max(10, Math.min(20, chartHeight / 30));
+            // 根據當前顯示的價格範圍動態計算感應範圍
+            const priceRange = chartRef.current?.getPriceScale().getPriceRange();
+            let hitThreshold = 10;
+            
+            if (priceRange && priceRange.minPrice !== undefined && priceRange.maxPrice !== undefined) {
+              const priceSpan = priceRange.maxPrice - priceRange.minPrice;
+              const hitRange = priceSpan * 0.02;
+              hitThreshold = Math.abs(seriesRef.current.stopLine.priceToCoordinate(stopPrice - hitRange) - stopY);
+              hitThreshold = Math.max(10, Math.min(40, hitThreshold));
+            }
             
             if (Math.abs(y - stopY) < hitThreshold) {
               container.style.cursor = 'ns-resize';
