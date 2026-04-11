@@ -351,15 +351,12 @@ export default function CandlestickChart({
       if (!candlestickSeriesRef.current || !atrRef.current || !entryPriceRef.current) return;
       
       const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       
-      // 檢查係咪點擊喺止蝕線附近（5px 範圍內）
-      if (seriesRef.current.stopLine) {
-        const stopY = seriesRef.current.stopLine.coordinateToPrice(
-          seriesRef.current.stopLine.priceToCoordinate(stopLoss || 0)
-        );
-        if (stopY !== null && Math.abs(y - stopY) < 10) {
+      // 檢查係咪點擊喺止蝕線附近（10px 範圍內）
+      if (seriesRef.current.stopLine && stopLoss && chartRef.current) {
+        const stopYCoordinate = chartRef.current.priceToCoordinate(stopLoss, seriesRef.current.stopLine);
+        if (stopYCoordinate !== null && Math.abs(y - stopYCoordinate) < 10) {
           isDragging = true;
           dragLine = 'stopLine';
           e.preventDefault();
@@ -403,11 +400,6 @@ export default function CandlestickChart({
       isDragging = false;
       dragLine = null;
     };
-
-    container.addEventListener('mousedown', handleMouseDown);
-    container.addEventListener('mousemove', handleMouseMove);
-    container.addEventListener('mouseup', handleMouseUp);
-    container.addEventListener('mouseleave', handleMouseUp);
 
     container.addEventListener('mousedown', handleMouseDown);
     container.addEventListener('mousemove', handleMouseMove);
