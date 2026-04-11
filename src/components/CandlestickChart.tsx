@@ -262,25 +262,22 @@ export default function CandlestickChart({
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
 
-      // 先檢查止蝕線拖曳 - 用 stopLine.lastValue() 獲取止蝕價
-      if (seriesRef.current.stopLine) {
-        const stopLine = seriesRef.current.stopLine;
-        const stopPrice = getStopLossPrice();
-        if (stopPrice !== undefined) {
-          const stopYCoordinate = stopLine.priceToCoordinate(stopPrice);
-          if (stopYCoordinate !== null) {
-            // Zoom in 之後止蝕線視覺上變大，用較大感應範圍確保仍然可以拖動
-            const chartHeight = rect.height;
-            const hitThreshold = Math.max(15, Math.min(40, chartHeight / 10));
+      // 先檢查止蝕線拖曳 - 用 candlestick series 計算止蝕線 Y 座標
+      // 重要：用 candlestickSeries 而唔用 stopLine，因為 zoom 之後 stopLine.priceToCoordinate 可能唔準確
+      if (stopLoss && candlestickSeriesRef.current) {
+        const stopYCoordinate = candlestickSeriesRef.current.priceToCoordinate(stopLoss);
+        if (stopYCoordinate !== null) {
+          // Zoom in 之後止蝕線視覺上變大，用較大感應範圍確保仍然可以拖動
+          const chartHeight = rect.height;
+          const hitThreshold = Math.max(20, Math.min(50, chartHeight / 8));
 
-            if (Math.abs(y - stopYCoordinate) < hitThreshold) {
-              dragStateRef.current.isDragging = true;
-              dragStateRef.current.dragLine = 'stopLine';
-              container.style.cursor = 'ns-resize';
-              e.preventDefault();
-              // 重要：呢度唔 stopPropagation，等 chart 可以正常處理 crosshair 同 zoom
-              return;
-            }
+          if (Math.abs(y - stopYCoordinate) < hitThreshold) {
+            dragStateRef.current.isDragging = true;
+            dragStateRef.current.dragLine = 'stopLine';
+            container.style.cursor = 'ns-resize';
+            e.preventDefault();
+            // 重要：呢度唔 stopPropagation，等 chart 可以正常處理 crosshair 同 zoom
+            return;
           }
         }
       }
@@ -303,19 +300,17 @@ export default function CandlestickChart({
       }
 
       // 顯示 cursor 變化 - 根據當前顯示的價格範圍動態計算感應範圍
-      if (seriesRef.current.stopLine && candlestickSeriesRef.current) {
-        const stopPrice = getStopLossPrice();
-        if (stopPrice !== undefined) {
-          const stopY = seriesRef.current.stopLine.priceToCoordinate(stopPrice);
-          if (stopY !== null) {
-            const chartHeight = rect.height;
-            const hitThreshold = Math.max(15, Math.min(40, chartHeight / 10));
+      // 重要：用 candlestickSeries 而唔用 stopLine，因為 zoom 之後 stopLine.priceToCoordinate 可能唔準確
+      if (stopLoss && candlestickSeriesRef.current) {
+        const stopY = candlestickSeriesRef.current.priceToCoordinate(stopLoss);
+        if (stopY !== null) {
+          const chartHeight = rect.height;
+          const hitThreshold = Math.max(20, Math.min(50, chartHeight / 8));
 
-            if (Math.abs(y - stopY) < hitThreshold) {
-              container.style.cursor = 'ns-resize';
-            } else {
-              container.style.cursor = 'crosshair';
-            }
+          if (Math.abs(y - stopY) < hitThreshold) {
+            container.style.cursor = 'ns-resize';
+          } else {
+            container.style.cursor = 'crosshair';
           }
         } else {
           container.style.cursor = 'crosshair';
@@ -427,33 +422,6 @@ export default function CandlestickChart({
   return (
     <div className="w-full h-[300px] relative">
       <div ref={chartContainerRef} className="w-full h-full" />
-
-      {/* 止蝕價浮動工具欄 */}
-      {stopLoss && (
-        <div
-          className="absolute right-2 top-2 bg-[#1a1a1a]/90 border border-[#ffaa00] rounded-lg px-3 py-2 flex flex-col items-center gap-1 shadow-lg z-10"
-          style={{ minWidth: '80px' }}
-        >
-          <span className="text-[#ffaa00] text-xs font-bold">止蝕價</span>
-          <span className="text-white text-sm font-mono">${stopLoss.toFixed(2)}</span>
-          <div className="flex gap-1 mt-1">
-            <button
-              onClick={() => adjustStopLoss(-1)}
-              className="w-7 h-7 bg-[#333] hover:bg-[#444] text-[#ffaa00] rounded text-lg font-bold flex items-center justify-center transition-colors"
-              title="減 $1"
-            >
-              −
-            </button>
-            <button
-              onClick={() => adjustStopLoss(1)}
-              className="w-7 h-7 bg-[#333] hover:bg-[#444] text-[#00ff88] rounded text-lg font-bold flex items-center justify-center transition-colors"
-              title="加 $1"
-            >
-              +
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
