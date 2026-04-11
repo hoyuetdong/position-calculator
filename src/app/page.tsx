@@ -563,21 +563,25 @@ export default function Home() {
   }, [])
   
   // Handle chart click - set entry price and auto-calculate stop loss
-  const handleChartClick = useCallback((price: number) => {
+  const handleChartClick = useCallback((price: number, fromChartComponent: boolean = false) => {
+    // 如果係從 EMA/MAs 按鈕設定 entry，先 reset ATR multiplier 到 default
+    if (!fromChartComponent) {
+      setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER }))
+    }
     setEntryPrice(price.toFixed(2))
-    // Reset ATR multiplier to default when setting new entry price
-    setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER }))
     // Auto calculate stop loss based on ATR and direction
+    // 使用 current settings.atrMultiplier（如果係 chart component 內部 call，就保持用戶調整過嘅值）
+    const currentMultiplier = settings.atrMultiplier
     if (atr) {
       if (direction === 'LONG') {
-        const stopLossPrice = price - atr * DEFAULT_ATR_MULTIPLIER
+        const stopLossPrice = price - atr * currentMultiplier
         setStopLoss(stopLossPrice.toFixed(2))
       } else {
-        const stopLossPrice = price + atr * DEFAULT_ATR_MULTIPLIER
+        const stopLossPrice = price + atr * currentMultiplier
         setStopLoss(stopLossPrice.toFixed(2))
       }
     }
-  }, [atr, direction])
+  }, [atr, direction, settings.atrMultiplier])
   
   // Initialize API connection
   useEffect(() => {
@@ -1151,7 +1155,7 @@ export default function Home() {
                       <span className="text-muted-foreground">EMA10: </span>
                       <button
                         type="button"
-                        onClick={() => { const v = quoteData.ema10; if (v != null) { setEntryPrice(v.toFixed(2)); setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER })); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * DEFAULT_ATR_MULTIPLIER).toFixed(2) : (v + atr * DEFAULT_ATR_MULTIPLIER).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.ema10; if (v != null) handleChartClick(v); }}
                         className="font-mono text-cyan-400 hover:underline cursor-pointer"
                         title="Set as entry price with ATR stop"
                       >${quoteData.ema10?.toFixed(2) || 'N/A'}</button>
@@ -1160,7 +1164,7 @@ export default function Home() {
                       <span className="text-muted-foreground">EMA20: </span>
                       <button
                         type="button"
-                        onClick={() => { const v = quoteData.ema20; if (v != null) { setEntryPrice(v.toFixed(2)); setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER })); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * DEFAULT_ATR_MULTIPLIER).toFixed(2) : (v + atr * DEFAULT_ATR_MULTIPLIER).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.ema20; if (v != null) handleChartClick(v); }}
                         className="font-mono text-orange-400 hover:underline cursor-pointer"
                         title="Set as entry price with ATR stop"
                       >${quoteData.ema20?.toFixed(2) || 'N/A'}</button>
@@ -1169,7 +1173,7 @@ export default function Home() {
                       <span className="text-muted-foreground">SMA50: </span>
                       <button
                         type="button"
-                        onClick={() => { const v = quoteData.sma50; if (v != null) { setEntryPrice(v.toFixed(2)); setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER })); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * DEFAULT_ATR_MULTIPLIER).toFixed(2) : (v + atr * DEFAULT_ATR_MULTIPLIER).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.sma50; if (v != null) handleChartClick(v); }}
                         className="font-mono text-blue-400 hover:underline cursor-pointer"
                         title="Set as entry price with ATR stop"
                       >${quoteData.sma50?.toFixed(2) || 'N/A'}</button>
@@ -1178,7 +1182,7 @@ export default function Home() {
                       <span className="text-muted-foreground">SMA200: </span>
                       <button
                         type="button"
-                        onClick={() => { const v = quoteData.sma200; if (v != null) { setEntryPrice(v.toFixed(2)); setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER })); if (atr) setStopLoss(direction === 'LONG' ? (v - atr * DEFAULT_ATR_MULTIPLIER).toFixed(2) : (v + atr * DEFAULT_ATR_MULTIPLIER).toFixed(2)); } }}
+                        onClick={() => { const v = quoteData.sma200; if (v != null) handleChartClick(v); }}
                         className="font-mono text-purple-400 hover:underline cursor-pointer"
                         title="Set as entry price with ATR stop"
                       >${quoteData.sma200?.toFixed(2) || 'N/A'}</button>

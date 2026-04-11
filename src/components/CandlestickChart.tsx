@@ -17,7 +17,7 @@ interface ChartProps {
   atr?: number | null
   atrMultiplier?: number
   atrPeriod?: number
-  onEntryPriceChange?: (price: number) => void  // 改名
+  onEntryPriceChange?: (price: number, fromChartComponent?: boolean) => void  // 支持第二個參數
   onStopLossChange?: (price: number) => void
   onAtrMultiplierChange?: (multiplier: number) => void  // 拖曳止蝕線後自動計算新 ATR 倍數
 }
@@ -100,6 +100,7 @@ export default function CandlestickChart({
   const isDraggingRef = useRef(false)
   const dragLineRef = useRef<'stopLine' | null>(null)
   const stopLossRef = useRef(stopLoss)
+  const wasDraggingRef = useRef(false)
   
   useEffect(() => {
     atrRef.current = atr
@@ -241,17 +242,9 @@ export default function CandlestickChart({
       const priceAtClick = candlestickSeriesRef.current.coordinateToPrice(param.point.y);
       
       if (priceAtClick !== null && !isNaN(priceAtClick)) {
-        onEntryPriceChange(priceAtClick);
-        
-        if (atrRef.current && onStopLossChangeRef.current) {
-          if (directionRef.current === 'LONG') {
-            const stopLossPrice = priceAtClick - (atrRef.current * atrMultiplierRef.current);
-            onStopLossChangeRef.current(stopLossPrice);
-          } else {
-            const stopLossPrice = priceAtClick + (atrRef.current * atrMultiplierRef.current);
-            onStopLossChangeRef.current(stopLossPrice);
-          }
-        }
+        // 通知 parent 呢次係 internal call，唔好 reset atrMultiplier
+        // 止蝕計算由 parent 統一處理
+        onEntryPriceChange(priceAtClick, true);
       }
     })
 
@@ -263,13 +256,16 @@ export default function CandlestickChart({
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
       
+      // 先檢查止蝕線拖曳
       if (seriesRef.current.stopLine && stopLossRef.current) {
         const stopYCoordinate = seriesRef.current.stopLine.priceToCoordinate(stopLossRef.current);
-        if (stopYCoordinate !== null && Math.abs(y - stopYCoordinate) < 10) {
+        if (stopYCoordinate !== null && Math.abs(y - stopYCoordinate) < 15) {
           isDraggingRef.current = true;
           dragLineRef.current = 'stopLine';
           container.style.cursor = 'ns-resize';
           e.preventDefault();
+          e.stopPropagation();
+          return;
         }
       }
     };
@@ -278,7 +274,8 @@ export default function CandlestickChart({
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
       
-      if (isDraggingRef.current && candlestickSeriesRef.current) {
+      // 如果係拖緊止蝕線，直接返回，唔做任何其他野
+      if (isDraggingRef.current && dragLineRef.current === 'stopLine' && candlestickSeriesRef.current) {
         const newPrice = candlestickSeriesRef.current.coordinateToPrice(y);
         if (newPrice !== null && !isNaN(newPrice) && onStopLossChangeRef.current) {
           onStopLossChangeRef.current(newPrice);
@@ -288,7 +285,7 @@ export default function CandlestickChart({
       
       if (seriesRef.current.stopLine && stopLossRef.current) {
         const stopY = seriesRef.current.stopLine.priceToCoordinate(stopLossRef.current);
-        if (stopY !== null && Math.abs(y - stopY) < 10) {
+        if (stopY !== null && Math.abs(y - stopY) < 15) {
           container.style.cursor = 'ns-resize';
         } else {
           container.style.cursor = 'crosshair';
@@ -299,7 +296,11 @@ export default function CandlestickChart({
     };
 
     const handleMouseUp = () => {
-      if (isDraggingRef.current && dragLineRef.current === 'stopLine' && atrRef.current && entryPriceRef.current && onAtrMultiplierChangeRef.current) {
+      // 記低今次係咪有拖過止蝕線
+      const wasDragging = isDraggingRef.current && dragLineRef.current === 'stopLine';
+      wasDraggingRef.current = wasDragging;
+      
+      if (wasDragging && atrRef.current && entryPriceRef.current && onAtrMultiplierChangeRef.current) {
         const currentStopLoss = stopLossRef.current;
         if (currentStopLoss && atrRef.current > 0) {
           let newMultiplier: number;
