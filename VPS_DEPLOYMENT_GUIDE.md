@@ -475,10 +475,10 @@ ln -sf ../../static static
 # 返回主目錄
 cd /opt/vcp-calculator
 
-# 創建 wrapper script 俾 frontend（bind 127.0.0.1）
+# 創建 wrapper script 俾 frontend（允許外部訪問）
 cat > /tmp/start-frontend.sh << 'EOFWRAPPER'
 #!/bin/bash
-export HOSTNAME='127.0.0.1'
+export HOSTNAME='0.0.0.0'
 export PORT='3000'
 export APP_PASSWORD='Yy442398!!'
 export PYTHON_API_URL='http://localhost:8000'
@@ -546,21 +546,21 @@ git pull origin main
 # Build
 npm run build
 
-# 配置環境（HOSTNAME=127.0.0.1 綁定本地）
+# 配置環境（HOSTNAME=0.0.0.0 允許外部訪問）
 cat > .next/standalone/.env << EOF
 APP_PASSWORD=Yy442398!!
 PYTHON_API_URL=http://localhost:8000
 API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
-HOSTNAME=127.0.0.1
+HOSTNAME=0.0.0.0
 EOF
 
 mkdir -p .next/standalone/.next
 ln -sf ../../static .next/standalone/.next/static
 
-# 創建 wrapper script（bind 127.0.0.1）
+# 創建 wrapper script（允許外部訪問）
 cat > /tmp/start-frontend.sh << 'EOFWRAPPER'
 #!/bin/bash
-export HOSTNAME='127.0.0.1'
+export HOSTNAME='0.0.0.0'
 export PORT='3000'
 export APP_PASSWORD='Yy442398!!'
 export PYTHON_API_URL='http://localhost:8000'
