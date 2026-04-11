@@ -270,7 +270,7 @@ export default function CandlestickChart({
           const stopYCoordinate = stopLine.priceToCoordinate(stopPrice);
           if (stopYCoordinate !== null) {
             // 根據當前顯示的價格範圍動態計算感應範圍（解決 zoom in 後止蝕線難拖動的問題）
-            const priceRange = chartRef.current?.getPriceScale().getPriceRange();
+            const priceRange = chartRef.current?.priceScale('right').getPriceRange();
             let hitThreshold = 10; // 預設最小感應範圍
             
             if (priceRange && priceRange.minPrice !== undefined && priceRange.maxPrice !== undefined) {
@@ -319,7 +319,7 @@ export default function CandlestickChart({
           const stopY = seriesRef.current.stopLine.priceToCoordinate(stopPrice);
           if (stopY !== null) {
             // 根據當前顯示的價格範圍動態計算感應範圍
-            const priceRange = chartRef.current?.getPriceScale().getPriceRange();
+            const priceRange = chartRef.current?.priceScale('right').getPriceRange();
             let hitThreshold = 10;
             
             if (priceRange && priceRange.minPrice !== undefined && priceRange.maxPrice !== undefined) {
