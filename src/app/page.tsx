@@ -688,6 +688,20 @@ export default function Home() {
       }
     }
   }, [settings.atrPeriod])
+
+  // 當 ATR 倍數或 direction 改變時，重新計算止蝕位（如果已有 entryPrice）
+  useEffect(() => {
+    if (atr && entryPrice) {
+      const price = parseFloat(entryPrice)
+      if (direction === 'LONG') {
+        const stopLossPrice = price - atr * settings.atrMultiplier
+        setStopLoss(stopLossPrice.toFixed(2))
+      } else {
+        const stopLossPrice = price + atr * settings.atrMultiplier
+        setStopLoss(stopLossPrice.toFixed(2))
+      }
+    }
+  }, [settings.atrMultiplier, direction, atr])
   
   // Calculations（避免 NaN：空字串當 0）
   const entryNum = parseFloat(entryPrice) || 0
@@ -1204,7 +1218,6 @@ export default function Home() {
                       atrPeriod={settings.atrPeriod}
                       onEntryPriceChange={handleChartClick}
                       onStopLossChange={(price) => setStopLoss(price.toFixed(2))}
-                      onAtrMultiplierChange={(multiplier) => setSettings(prev => ({ ...prev, atrMultiplier: multiplier }))}
                     />
                   </div>
                 )}

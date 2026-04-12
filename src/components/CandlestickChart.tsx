@@ -19,7 +19,7 @@ interface ChartProps {
   atrPeriod?: number
   onEntryPriceChange?: (price: number, fromChartComponent?: boolean) => void  // 支持第二個參數
   onStopLossChange?: (price: number) => void
-  onAtrMultiplierChange?: (multiplier: number) => void  // 拖曳止蝕線後自動計算新 ATR 倍數
+  onResetStopLoss?: () => void  // 新增：當重新設定 buy point 時重置止蝕位
 }
 
 // Calculate EMA for entire array
@@ -74,7 +74,7 @@ export default function CandlestickChart({
   atrPeriod = 14,
   onEntryPriceChange, 
   onStopLossChange,
-  onAtrMultiplierChange
+  onResetStopLoss
 }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -92,9 +92,13 @@ export default function CandlestickChart({
   const atrMultiplierRef = useRef(atrMultiplier)
   const atrPeriodRef = useRef(atrPeriod)
   const directionRef = useRef(direction)
-  const onAtrMultiplierChangeRef = useRef(onAtrMultiplierChange)
   const entryPriceRef = useRef(entryPrice)
   const onStopLossChangeRef = useRef(onStopLossChange)
+  const onResetStopLossRef = useRef<(() => void) | undefined>(undefined)
+  const lastEntryPriceRef = useRef<number | undefined>(undefined)
+  
+  // 追蹤手動拖動狀態（用於自動重置）
+  const manualStopLossOffsetRef = useRef<number | null>(null)
   
   // 拖曳狀態
   const isDraggingRef = useRef(false)
@@ -119,16 +123,16 @@ export default function CandlestickChart({
   }, [atrPeriod])
 
   useEffect(() => {
-    onAtrMultiplierChangeRef.current = onAtrMultiplierChange
-  }, [onAtrMultiplierChange])
-
-  useEffect(() => {
     entryPriceRef.current = entryPrice
   }, [entryPrice])
 
   useEffect(() => {
     onStopLossChangeRef.current = onStopLossChange
   }, [onStopLossChange])
+
+  useEffect(() => {
+    onResetStopLossRef.current = onResetStopLoss
+  }, [onResetStopLoss])
 
   useEffect(() => {
     stopLossRef.current = stopLoss
@@ -251,7 +255,7 @@ export default function CandlestickChart({
     const container = chartContainerRef.current;
 
     const handleMouseDown = (e: MouseEvent) => {
-      if (!candlestickSeriesRef.current) return;
+      if (!candlestickSeriesRef.current || !chartRef.current) return;
       
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
@@ -263,6 +267,21 @@ export default function CandlestickChart({
           isDraggingRef.current = true;
           dragLineRef.current = 'stopLine';
           container.style.cursor = 'ns-resize';
+          
+          // 禁用手勢，防止觸發整個圖表的垂直位移
+          chartRef.current.applyOptions({
+            handleScroll: {
+              mouseWheel: false,
+              pressedMouseMove: false,
+              vertTouchDrag: false
+            },
+            handleScale: {
+              axisPressedMouseMove: false,
+              mouseWheel: false,
+              pinch: false
+            }
+          });
+          
           e.preventDefault();
           e.stopPropagation();
           return;
@@ -300,29 +319,49 @@ export default function CandlestickChart({
       const wasDragging = isDraggingRef.current && dragLineRef.current === 'stopLine';
       wasDraggingRef.current = wasDragging;
       
-      if (wasDragging && atrRef.current && entryPriceRef.current && onAtrMultiplierChangeRef.current) {
+      if (wasDragging && atrRef.current && entryPriceRef.current) {
         const currentStopLoss = stopLossRef.current;
         if (currentStopLoss && atrRef.current > 0) {
-          let newMultiplier: number;
+          // 計算並記錄偏移量（作為獨立的 overlay 狀態）
+          let offset: number;
           if (directionRef.current === 'LONG') {
-            newMultiplier = (entryPriceRef.current - currentStopLoss) / atrRef.current;
+            offset = entryPriceRef.current - currentStopLoss;
           } else {
-            newMultiplier = (currentStopLoss - entryPriceRef.current) / atrRef.current;
+            offset = currentStopLoss - entryPriceRef.current;
           }
-          newMultiplier = Math.round(newMultiplier * 10) / 10;
-          newMultiplier = Math.max(0.1, Math.min(10, newMultiplier));
-          onAtrMultiplierChangeRef.current(newMultiplier);
+          manualStopLossOffsetRef.current = offset;
         }
       }
+      
+      // 恢復圖表手勢
+      if (chartRef.current) {
+        chartRef.current.applyOptions({
+          handleScroll: {
+            mouseWheel: true,
+            pressedMouseMove: true,
+            vertTouchDrag: true
+          },
+          handleScale: {
+            axisPressedMouseMove: true,
+            mouseWheel: true,
+            pinch: true
+          }
+        });
+      }
+      
       isDraggingRef.current = false;
       dragLineRef.current = null;
       container.style.cursor = 'crosshair';
     };
 
+    // 使用 window 監聽 mouseup，防止黏手問題
+    window.addEventListener('mouseup', handleMouseUp);
+    
     container.addEventListener('mousedown', handleMouseDown);
     container.addEventListener('mousemove', handleMouseMove);
-    container.addEventListener('mouseup', handleMouseUp);
-    container.addEventListener('mouseleave', handleMouseUp);
+    // 移除 container 的 mouseup/mouseleave，確保拖動時跟手
+    // container.addEventListener('mouseup', handleMouseUp);
+    // container.addEventListener('mouseleave', handleMouseUp);
 
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
@@ -333,10 +372,11 @@ export default function CandlestickChart({
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      window.removeEventListener('mouseup', handleMouseUp);
       container.removeEventListener('mousedown', handleMouseDown);
       container.removeEventListener('mousemove', handleMouseMove);
-      container.removeEventListener('mouseup', handleMouseUp);
-      container.removeEventListener('mouseleave', handleMouseUp);
+      // container.removeEventListener('mouseup', handleMouseUp);
+      // container.removeEventListener('mouseleave', handleMouseUp);
       try {
         if (chartRef.current) {
           chartRef.current.remove()
@@ -346,6 +386,11 @@ export default function CandlestickChart({
       } catch (e) {}
     }
   }, [data])
+
+  // 當 entryPrice prop 改變時，清除手動拖動狀態（自動重置邏輯）
+  useEffect(() => {
+    manualStopLossOffsetRef.current = null;
+  }, [entryPrice])
 
   // Update entry/stop lines
   useEffect(() => {
