@@ -14,9 +14,11 @@
 │  │ :11111   │    │   :8000      │    │   :3000     │  │
 │  └──────────┘    └──────────────┘    └──────┬──────┘  │
 │                                              │          │
-│                          ◄── 用戶瀏覽器 (HTTP/HTTPS)   │
+│                          ◄── 用戶瀏覽器 (直接訪問 :3000) │
 └─────────────────────────────────────────────────────────┘
 ```
+
+> **重要**：直接通過 `:3000` 訪問，唔使用 Nginx 反向代理。
 
 ---
 
@@ -72,13 +74,12 @@ ssh root@your-vps-ip
 
 # 安裝必要軟件
 apt update && apt upgrade -y
-apt install -y python3 python3-pip python3-venv nginx certbot python3-certbot-nginx
+apt install -y python3 python3-pip python3-venv screen
 
 # 設定 Firewall
 ufw default deny incoming
 ufw allow 22/tcp
-ufw allow 80/tcp
-ufw allow 443/tcp
+ufw allow 3000/tcp
 ufw enable
 ```
 
@@ -197,69 +198,25 @@ curl http://localhost:8000/api/positions -H 'X-API-Key: vjItBPUlggAEJPZRoZ3xbNin
 
 > **注意**：OpenD 必須先運行！如果 OpenD 未運行，`start-vps.sh` 會顯示後端啟動失敗。
 
-### Step 7: Nginx 反向代理
+---
 
-```bash
-# 創建 Nginx 配置
-nano /etc/nginx/sites-available/position-calculator
+## 直接訪問 (唔使用 Nginx)
+
+部署後直接通過 `:3000` 訪問，唔使用 Nginx：
+
+```
+http://107.173.153.41:3000/
 ```
 
-```nginx
-# VPS Position Calculator - Nginx Configuration
-# 所有 /api/* 必須走 Next.js → Backend（Next.js 會自動加 API Key）
-
-upstream frontend {
-    server 127.0.0.1:3000;
-    keepalive 64;
-}
-
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-
-    # 重要：所有 /api/* 走 Next.js（Next.js 會自動加 X-API-Key）
-    location /api/ {
-        proxy_pass http://frontend;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # Frontend (Next.js)
-    location / {
-        proxy_pass http://frontend;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-```
-
-> **⚠️ 重要**：`/api/*` 必須走 Next.js，唔可以直接去 Backend！
-> 如果直接去 Backend，會因為冇 API Key 而 401 Unauthorized。
-> Next.js API Route 會自動從環境變量讀取 `API_SECRET` 並加到 Header。
-
-```bash
-# 啟用配置
-ln -s /etc/nginx/sites-available/position-calculator /etc/nginx/sites-enabled/
-nginx -t
-systemctl reload nginx
-
-# SSL（可選）
-certbot --nginx -d your-domain.com
-```
+> **重要**：如果 Nginx 行緊，會 intercept `:80` 嘅 request。需要先停用 Nginx：
+> ```bash
+> systemctl stop nginx
+> systemctl disable nginx
+> ```
 
 ---
 
-## 本地運行
+## 常見問題排查
 
 ```bash
 cd position-calculator
@@ -510,6 +467,7 @@ curl -s http://localhost:8000/api/health
 
 ```
 VPS IP: 107.173.153.41
+訪問 URL: http://107.173.153.41:3000/
 OpenD: 170.106.62.115:11111 (Remote) / 127.0.0.1:11111 (Local)
 代碼: /opt/vcp-calculator
 
@@ -517,6 +475,12 @@ Screen: app (Backend:8000) | frontend (:3000) | opend (:11111)
 API Key: vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
 密碼: Yy442398!!
 ```
+
+> **重要**：唔使用 Nginx，直接通過 `:3000` 訪問。如果 Nginx 行緊需要先停用：
+> ```bash
+> systemctl stop nginx
+> systemctl disable nginx
+> ```
 
 ## 系統架構
 

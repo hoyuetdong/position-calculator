@@ -99,7 +99,7 @@ echo ""
 echo "Screen 狀態:"
 screen -ls
 echo ""
-echo "查看 Position Calculator: http://107.173.153.41"
+echo "查看 Position Calculator: http://107.173.153.41:3000"
 echo ""
 echo "查看後端日誌:"
 echo "  screen -r app"
