@@ -16,7 +16,7 @@ interface ChartProps {
   stopLoss?: number
   atr?: number | null
   atrMultiplier?: number
-  atrPeriod?: number
+  atrPeriod?: number | null
   onEntryPriceChange?: (price: number, fromChartComponent?: boolean) => void  // 支持第二個參數
   onStopLossChange?: (price: number) => void
   onResetStopLoss?: () => void  // 新增：當重新設定 buy point 時重置止蝕位
