@@ -94,17 +94,17 @@ export default function CandlestickChart({
   const directionRef = useRef(direction)
   const entryPriceRef = useRef(entryPrice)
   const onStopLossChangeRef = useRef(onStopLossChange)
+  const stopLossRef = useRef(stopLoss)
   const onResetStopLossRef = useRef<(() => void) | undefined>(undefined)
   const lastEntryPriceRef = useRef<number | undefined>(undefined)
   
   // 追蹤手動拖動狀態（用於自動重置）
   const manualStopLossOffsetRef = useRef<number | null>(null)
   
-  // 止蝕線拖曳狀態
-  const dragStateRef = useRef<{
-    isDragging: boolean
-    dragLine: 'stopLine' | null
-  }>({ isDragging: false, dragLine: null })
+  // 拖曳狀態
+  const isDraggingRef = useRef(false)
+  const dragLineRef = useRef<'stopLine' | null>(null)
+  const wasDraggingRef = useRef(false)
   
   useEffect(() => {
     atrRef.current = atr
@@ -251,8 +251,6 @@ export default function CandlestickChart({
 
     chart.subscribeClick((param: MouseEventParams) => {
       if (!param.point || !onEntryPriceChange || !candlestickSeriesRef.current) return;
-      // 如果係拖緊止蝕線，唔處理 click
-      if (dragStateRef.current.isDragging && dragStateRef.current.dragLine === 'stopLine') return;
       
       const priceAtClick = candlestickSeriesRef.current.coordinateToPrice(param.point.y);
       
