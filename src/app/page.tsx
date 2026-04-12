@@ -40,7 +40,7 @@ interface Settings {
   accountSize: number
   defaultRiskPercent: number
   atrMultiplier: number
-  atrPeriod: number
+  atrPeriod: number | null
 }
 
 // Default ATR multiplier
@@ -447,7 +447,7 @@ export default function Home() {
     accountSize: 100000,
     defaultRiskPercent: 0.3,
     atrMultiplier: DEFAULT_ATR_MULTIPLIER,
-    atrPeriod: 14
+    atrPeriod: null
   })
   // Hydration fix: defer all client-side logic
   const [hydrated, setHydrated] = useState(false)
@@ -683,12 +683,12 @@ export default function Home() {
     
     const timer = setTimeout(fetchData, 500)
     return () => clearTimeout(timer)
-  }, [ticker, dataSource, settings.atrPeriod])
+  }, [ticker, dataSource])
 
   // 當 ATR 週期改變時，重新計算 ATR（如果有歷史數據）
   useEffect(() => {
-    if (historicalData.length > 0 && settings.atrPeriod) {
-      const atrPeriod = settings.atrPeriod
+    const atrPeriod = settings.atrPeriod ?? 14
+    if (historicalData.length > 0) {
       if (historicalData.length >= atrPeriod) {
         const lastKlines = historicalData.slice(-atrPeriod)
         const atrData = lastKlines.map((k) => {
@@ -1124,8 +1124,23 @@ export default function Home() {
                 type="number"
                 min="1"
                 max="100"
-                value={settings.atrPeriod}
-                onChange={(e) => setSettings({ ...settings, atrPeriod: Math.max(1, Math.min(100, parseInt(e.target.value) || 14)) })}
+                value={settings.atrPeriod ?? ''}
+                onChange={(e) => {
+                  const val = e.target.value
+                  if (val === '') {
+                    setSettings({ ...settings, atrPeriod: null })
+                  } else {
+                    const num = parseInt(val)
+                    if (!isNaN(num)) {
+                      setSettings({ ...settings, atrPeriod: Math.max(1, Math.min(100, num)) })
+                    }
+                  }
+                }}
+                onBlur={(e) => {
+                  if (e.target.value === '') {
+                    setSettings({ ...settings, atrPeriod: 14 })
+                  }
+                }}
                 className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
@@ -1157,7 +1172,7 @@ export default function Home() {
                 </div>
                 <div className="mt-4 flex gap-4 text-sm">
                   <div>
-                    <span className="text-muted-foreground">ATR ({settings.atrPeriod}): </span>
+                    <span className="text-muted-foreground">ATR ({settings.atrPeriod ?? 14}): </span>
                     <span className="text-primary font-mono">${atr?.toFixed(2) || 'N/A'}</span>
                   </div>
                   <div>
