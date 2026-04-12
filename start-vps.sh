@@ -18,7 +18,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 停止舊的 screens
+# 停止舊的 screens（唔好 kill opend！）
 echo -e "${YELLOW}停止舊的 screens...${NC}"
 screen -S app -X quit 2>/dev/null || true
 screen -S frontend -X quit 2>/dev/null || true
@@ -26,19 +26,22 @@ sleep 1
 
 # 殺掉舊進程（確保乾淨）
 pkill -f "python3 backend/main.py" 2>/dev/null || true
-pkill -f "node" 2>/dev/null || true
+pkill -f "node.*server.js" 2>/dev/null || true
 sleep 1
 
 echo -e "${GREEN}✓ 舊進程已清理${NC}"
 echo ""
 
-# 確保 .next/standalone 存在（production build）
-if [ ! -d ".next/standalone" ]; then
-    echo -e "${YELLOW}需要先 build，請運行: npm run build${NC}"
-    exit 1
-fi
+# 拉取最新代碼
+echo -e "${GREEN}拉取最新代碼...${NC}"
+git pull origin main
+
+# Build
+echo -e "${GREEN}Build Next.js...${NC}"
+npm run build
 
 # 確保 static files symlink 存在（standalone 模式的 bug）
+mkdir -p .next/standalone/.next
 if [ ! -L ".next/standalone/.next/static" ]; then
     echo -e "${GREEN}創建 static files symlink...${NC}"
     rm -rf .next/standalone/.next/static 2>/dev/null
@@ -51,7 +54,7 @@ if [ -f ".env" ]; then
     set -a
     source .env
     set +a
-    
+
     # 創建 wrapper script 俾 frontend（因為 screen session 唔會 inherit 環境變數）
     cat > /tmp/start-frontend.sh << EOFWRAPPER
 #!/bin/bash
@@ -64,7 +67,7 @@ cd ${SCRIPT_DIR}/.next/standalone
 exec node server.js
 EOFWRAPPER
     chmod +x /tmp/start-frontend.sh
-    echo -e "${GREEN}✓ Frontend wrapper script 已創建 (bind 127.0.0.1)${NC}"
+    echo -e "${GREEN}✓ Frontend wrapper script 已創建${NC}"
 fi
 
 # 確保 .next/standalone/.env 存在（下次重啟時 load）
@@ -85,7 +88,7 @@ sleep 3
 
 echo -e "${GREEN}啟動 Frontend...${NC}"
 
-# Frontend screen (separate)
+# Frontend screen
 screen -dmS frontend bash -c '/tmp/start-frontend.sh; exec bash'
 
 # 等一下

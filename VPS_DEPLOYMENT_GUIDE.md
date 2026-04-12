@@ -422,7 +422,7 @@ cat > .next/standalone/.env << 'EOF'
 APP_PASSWORD=Yy442398!!
 PYTHON_API_URL=http://localhost:8000
 API_SECRET=vjItBPUlggAEJPZRoZ3xbNinDbfL0XdoiNqL2GBp66A=
-HOSTNAME=127.0.0.1
+HOSTNAME=0.0.0.0
 EOF
 
 # 創建 static files symlink（重要！否則 CSS/JS 會 404）
