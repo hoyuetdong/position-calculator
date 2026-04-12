@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { 
   Calculator, 
   TrendingUp, 
@@ -519,6 +519,17 @@ export default function Home() {
   // Zero-Cost Calculator state (controlled by parent)
   const [profitPercentLocal, setProfitPercentLocal] = useState<number>(35)
   const [sharesLocal, setSharesLocal] = useState<string>('')
+
+  // 用 ref 嚟確保 callback 入面可以讀到最新 settings（避免 stale closure）
+  // 重要：呢個 effect 會喺每次 render 之後執行，確保 settingsRef 係最新值
+  const settingsRef = useRef(settings)
+  useEffect(() => {
+    settingsRef.current = settings
+  })
+  const atrRef = useRef(atr)
+  useEffect(() => {
+    atrRef.current = atr
+  }, [atr])
   
   // Sync positions from broker
   const syncBrokerPositions = useCallback(async () => {
@@ -570,8 +581,9 @@ export default function Home() {
     }
     setEntryPrice(price.toFixed(2))
     // Auto calculate stop loss based on ATR and direction
-    // 使用 current settings.atrMultiplier（如果係 chart component 內部 call，就保持用戶調整過嘅值）
-    const currentMultiplier = settings.atrMultiplier
+    // 使用 settingsRef（避免 stale closure 問題）
+    const currentSettings = settingsRef.current
+    const currentMultiplier = currentSettings.atrMultiplier
     if (atr) {
       if (direction === 'LONG') {
         const stopLossPrice = price - atr * currentMultiplier
@@ -581,7 +593,7 @@ export default function Home() {
         setStopLoss(stopLossPrice.toFixed(2))
       }
     }
-  }, [atr, direction, settings.atrMultiplier])
+  }, [atr, direction])
   
   // Initialize API connection
   useEffect(() => {
