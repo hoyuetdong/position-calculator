@@ -1223,13 +1223,20 @@ def _place_order(
             # Market order uses 0 as price
             price = 0
         else:
-            # 美股不支持 ABSOLUTE_LIMIT，如果是 LIMIT 单则改为 MARKET
+            # 根據市場同交易環境選擇限價單類型
             if market == futu.TrdMarket.US:
+                # 美股不支持 ABSOLUTE_LIMIT，LIMIT 單改為 MARKET
                 order_type_enum = futu.OrderType.MARKET
                 price = 0
                 print(f"[Order] US stock LIMIT -> MARKET (US stocks don't support LIMIT orders)")
             else:
-                order_type_enum = futu.OrderType.ABSOLUTE_LIMIT
+                # 港股：SIMULATE 用 NORMAL，REAL 用 ABSOLUTE_LIMIT
+                if trd_env_enum == futu.TrdEnv.SIMULATE:
+                    order_type_enum = futu.OrderType.NORMAL
+                    print(f"[Order] SIMULATE environment: using NORMAL order type")
+                else:
+                    order_type_enum = futu.OrderType.ABSOLUTE_LIMIT
+                    print(f"[Order] REAL environment: using ABSOLUTE_LIMIT order type")
                 # price 保持不變（已在前面設定）
 
         # Determine time_in_force
