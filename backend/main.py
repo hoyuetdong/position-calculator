@@ -1207,47 +1207,43 @@ def _place_order(
         acc_id = acc_ids[0]
         
         # Determine order type
-        # STOP order: 使用 trigger_price (Stop Entry 單)
-        # 如果有 trigger_price，即使 order_type 是 MARKET 也用 STOP 類型
+        # 優先順序：
+        # 1. 如果有 trigger_price（突破單）：使用 STOP 類型
+        # 2. 如果係 MARKET 單：使用 MARKET
+        # 3. 否則係 LIMIT 單：根據市場同環境選擇
+        
         if trigger_price:
+            # 突破單 / Stop Entry：當價格觸及 trigger_price 時執行
             order_type_enum = futu.OrderType.STOP
             # Stop Entry 單: aux_price = 觸發價, price = 執行價
-            # 如果是 MARKET，執行價設為 0（以市價成交）
-            if order_type.upper() == "MARKET":
-                price = 0  # 市價成交
+            if order_type.upper() == "MARKET" or price == 0:
+                pass  # 市價成交，price 保持 0
             else:
-                pass  # 用戶指定的執行價（保持 price 不變）
-            print(f"[Order] Using STOP order type with trigger_price=${trigger_price}, price=${price}")
+                pass  # 用戶指定的執行價
+            print(f"[Order] STOP order (突破單): trigger=${trigger_price}, exec_price=${price}")
         elif order_type.upper() == "MARKET":
             order_type_enum = futu.OrderType.MARKET
-            # Market order uses 0 as price
             price = 0
-        # 美股限制：只支持 NORMAL 和 MARKET 類型
-        # 港股可用 ABSOLUTE_LIMIT（絕對限價單：必須完全成交，否則失敗）
-        if market == futu.TrdMarket.US:
-            order_type_enum = futu.OrderType.NORMAL
-            print(f"[Order] US stock using NORMAL order type")
+            print(f"[Order] MARKET order")
         else:
-            # 根據市場同交易環境選擇限價單類型
+            # LIMIT 單：根據市場同環境選擇
             if market == futu.TrdMarket.US:
-                # 美股：SIMULATE 環境只支持 MARKET，REAL 環境支持 ABSOLUTE_LIMIT
+                # 美股：SIMULATE 強制用 MARKET，REAL 用 NORMAL
                 if trd_env_enum == futu.TrdEnv.SIMULATE:
                     order_type_enum = futu.OrderType.MARKET
                     price = 0
-                    print(f"[Order] US stock LIMIT -> MARKET (SIMULATE doesn't support LIMIT for US stocks)")
+                    print(f"[Order] US stock LIMIT -> MARKET (SIMULATE only)")
                 else:
-                    # REAL 環境可以用 ABSOLUTE_LIMIT
-                    order_type_enum = futu.OrderType.ABSOLUTE_LIMIT
-                    print(f"[Order] US stock using ABSOLUTE_LIMIT (REAL environment)")
+                    order_type_enum = futu.OrderType.NORMAL
+                    print(f"[Order] US stock LIMIT: NORMAL")
             else:
                 # 港股：SIMULATE 用 NORMAL，REAL 用 ABSOLUTE_LIMIT
                 if trd_env_enum == futu.TrdEnv.SIMULATE:
                     order_type_enum = futu.OrderType.NORMAL
-                    print(f"[Order] HK stock SIMULATE: using NORMAL order type")
+                    print(f"[Order] HK stock LIMIT: NORMAL")
                 else:
                     order_type_enum = futu.OrderType.ABSOLUTE_LIMIT
-                    print(f"[Order] HK stock REAL: using ABSOLUTE_LIMIT order type")
-                # price 保持不變（已在前面設定）
+                    print(f"[Order] HK stock LIMIT: ABSOLUTE_LIMIT")
 
         # 美股限制：MARKET order 只支持 DAY
         # 模擬交易限制：不支持 GTC/GTD
