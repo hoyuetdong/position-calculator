@@ -1222,6 +1222,11 @@ def _place_order(
             order_type_enum = futu.OrderType.MARKET
             # Market order uses 0 as price
             price = 0
+        # 美股限制：只支持 NORMAL 和 MARKET 類型
+        # 港股可用 ABSOLUTE_LIMIT（絕對限價單：必須完全成交，否則失敗）
+        if market == futu.TrdMarket.US:
+            order_type_enum = futu.OrderType.NORMAL
+            print(f"[Order] US stock using NORMAL order type")
         else:
             # 根據市場同交易環境選擇限價單類型
             if market == futu.TrdMarket.US:
@@ -1244,6 +1249,17 @@ def _place_order(
                     print(f"[Order] HK stock REAL: using ABSOLUTE_LIMIT order type")
                 # price 保持不變（已在前面設定）
 
+        # 美股限制：MARKET order 只支持 DAY
+        # 模擬交易限制：不支持 GTC/GTD
+        if market == futu.TrdMarket.US and order_type_enum == futu.OrderType.MARKET:
+            if time_in_force.upper() != "DAY":
+                print(f"[Order] US MARKET order auto-switching time_in_force to DAY (MARKET only supports DAY)")
+                time_in_force = "DAY"
+        
+        if trd_env_enum == futu.TrdEnv.SIMULATE and time_in_force.upper() != "DAY":
+            print(f"[Order] SIMULATE environment auto-switching time_in_force to DAY (SIMULATE doesn't support GTC/GTD)")
+            time_in_force = "DAY"
+        
         # Determine time_in_force
         if time_in_force.upper() == "GTC":
             time_in_force_enum = futu.TimeInForce.GTC
@@ -1749,10 +1765,14 @@ def place_order(order: OrderRequest):
     if trd_env.upper() == "REAL":
         print(f"[WARNING] REAL trading enabled! Order will use real money!")
     
+    print(f"[Order] ========== ORDER REQUEST ==========")
     print(f"[Order] Request: {order.model_dump_json()}")
     print(f"[Order] Trade environment: {trd_env}")
+    print(f"[Order] Host: {host}:{port}")
+    print(f"[Order] Has trade password: {bool(trade_pwd)}")
     print(f"[Order] Time in force: {order.time_in_force}, expire_date: {order.expire_date}")
     print(f"[Order] Order type: {order.order_type}, trigger_price: {order.trigger_price}, price: {order.price}")
+    print(f"[Order] ===================================")
 
     try:
         result = _place_order(
@@ -1780,12 +1800,24 @@ def place_order(order: OrderRequest):
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
     except ImportError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[Order] ERROR: futu-api import failed: {e}")
+        raise HTTPException(status_code=500, detail=f"futu-api not installed: {e}")
+    except ValueError as e:
+        # 業務邏輯錯誤（如帳戶問題、參數錯誤）
+        print(f"[Order] ERROR: Business logic error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to place order: {str(e)}"
-        )
+        import traceback
+        print(f"[Order] ERROR: Unexpected error: {e}")
+        print(f"[Order] Traceback: {traceback.format_exc()}")
+        # 根據錯誤類型返回相應狀態碼
+        error_str = str(e).lower()
+        if "timeout" in error_str or "timed out" in error_str:
+            raise HTTPException(status_code=504, detail=f"Connection timeout: {e}")
+        elif "connect" in error_str or "connection" in error_str:
+            raise HTTPException(status_code=503, detail=f"Cannot connect to OpenD at {host}:{port}. Make sure OpenD is running. Error: {e}")
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to place order: {str(e)}")
 
 
 @app.get("/api/pending-stops", response_model=PendingStopOrdersResponse, dependencies=[Depends(verify_api_key)])
