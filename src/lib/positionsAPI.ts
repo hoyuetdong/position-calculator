@@ -118,7 +118,7 @@ export async function placeOrder(order: OrderRequest): Promise<OrderResponse> {
 }
 
 export async function fetchPendingStopOrders(): Promise<PendingStopOrdersResponse> {
-  const response = await fetchWithTimeout('/api/pending-stops')
+  const response = await fetchWithTimeout('/api/pending-stops', { cache: 'no-store' })
   if (!response.ok) {
     const error = await response.json()
     throw new Error(error.details || 'Failed to fetch pending stop orders')

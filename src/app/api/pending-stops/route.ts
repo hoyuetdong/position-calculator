@@ -7,6 +7,7 @@ export async function GET() {
     const backendUrl = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
     const apiKey = process.env.API_SECRET || ''
     const response = await fetchWithTimeout(`${backendUrl}/api/pending-stops`, {
+      cache: 'no-store',
       headers: apiKey ? { 'X-API-Key': apiKey } : {},
     })
 
@@ -19,7 +20,7 @@ export async function GET() {
     }
 
     const result = await response.json()
-    return NextResponse.json(result)
+    return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store, max-age=0' } })
   } catch (error) {
     console.error('Pending stops API error:', error)
     const errorMessage = error instanceof Error ? error.message : String(error)
