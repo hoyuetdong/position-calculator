@@ -1116,63 +1116,7 @@ export default function Home() {
                 ))}
               </div>
             </div>
-            <div>
-              <label className="text-sm text-muted-foreground">止蝕模式</label>
-              <select value={settings.stopMode} onChange={e => setSettings({ ...settings, stopMode: e.target.value as 'atr' | 'percent' })}
-                className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg">
-                <option value="atr">ATR 倍數</option>
-                <option value="percent">% Hard Stop（按入場價）</option>
-              </select>
-              {settings.stopMode === 'percent' && <div className="mt-2">
-                <label className="text-sm text-muted-foreground">Hard Stop %</label>
-                <input type="number" min="0.01" max="99.99" step="0.1" value={settings.hardStopPercent || ''}
-                  onChange={e => setSettings({ ...settings, hardStopPercent: Math.min(99.99, Math.max(0, Number(e.target.value))) })}
-                  className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg" />
-                <p className="text-xs text-muted-foreground mt-1">止蝕觸發價按入場價計算；實際成交價可能有滑價。</p>
-              </div>}
-            </div>
-            <div>
-              <label className="text-sm text-muted-foreground">ATR 倍數 (止蝕)</label>
-              <select
-                disabled={settings.stopMode === 'percent'}
-                value={settings.atrMultiplier}
-                onChange={(e) => setSettings({ ...settings, atrMultiplier: parseFloat(e.target.value) })}
-                className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-              >
-                <option value="0.5">0.5</option>
-                <option value="1">1</option>
-                <option value="1.5">1.5</option>
-                <option value="2">2</option>
-                <option value="2.5">2.5</option>
-                <option value="3">3</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-sm text-muted-foreground">ATR 週期</label>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={settings.atrPeriod ?? ''}
-                onChange={(e) => {
-                  const val = e.target.value
-                  if (val === '') {
-                    setSettings({ ...settings, atrPeriod: null })
-                  } else {
-                    const num = parseInt(val)
-                    if (!isNaN(num)) {
-                      setSettings({ ...settings, atrPeriod: Math.max(1, Math.min(100, num)) })
-                    }
-                  }
-                }}
-                onBlur={(e) => {
-                  if (e.target.value === '') {
-                    setSettings({ ...settings, atrPeriod: 14 })
-                  }
-                }}
-                className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
+
           </div>
         </div>
       )}
@@ -1328,7 +1272,7 @@ export default function Home() {
               </div>
               
               {/* 第一行：股票代號 | 買入價 & 止蝕價 */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* 左邊：股票代號 */}
                 <div>
                   <label className="text-sm text-muted-foreground">股票代號</label>
@@ -1373,7 +1317,7 @@ export default function Home() {
                         value={stopLoss}
                         onChange={(e) => setStopLoss(e.target.value)}
                         placeholder="止蝕"
-                        className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                        className="min-w-0 w-full mt-1 px-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
                       />
                       {suggestedStopLoss && (
                         <button
@@ -1384,6 +1328,45 @@ export default function Home() {
                         >
                           <Info className="w-4 h-4" />
                         </button>
+                      )}
+                    </div>
+                    <div className="mt-2 space-y-1.5" aria-label="止蝕設定">
+                      <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="止蝕模式">
+                        {(['atr', 'percent'] as const).map(mode => (
+                          <button key={mode} type="button" aria-pressed={settings.stopMode === mode}
+                            onClick={() => setSettings({ ...settings, stopMode: mode })}
+                            className={`flex-1 rounded px-1 py-1 text-xs transition-colors ${settings.stopMode === mode ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground'}`}>
+                            {mode === 'atr' ? 'ATR' : '% 止蝕'}
+                          </button>
+                        ))}
+                      </div>
+                      {settings.stopMode === 'atr' ? (
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <label className="flex min-w-0 flex-1 items-center gap-1">
+                            <span>×</span>
+                            <select aria-label="ATR 倍數" value={settings.atrMultiplier}
+                              onChange={e => setSettings({ ...settings, atrMultiplier: Number(e.target.value) })}
+                              className="h-7 w-full min-w-0 rounded border border-border bg-secondary px-1 text-foreground focus:outline-none focus:ring-1 focus:ring-primary">
+                              {[0.5, 1, 1.5, 2, 2.5, 3].map(value => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="flex min-w-0 flex-1 items-center gap-1">
+                            <span className="shrink-0">期</span>
+                            <input aria-label="ATR 週期" type="number" min="1" max="100" placeholder="14"
+                              value={settings.atrPeriod ?? ''}
+                              onChange={e => setSettings({ ...settings, atrPeriod: e.target.value === '' ? null : Math.max(1, Math.min(100, Number(e.target.value))) })}
+                              onBlur={e => { if (e.target.value === '') setSettings({ ...settings, atrPeriod: 14 }) }}
+                              className="h-7 w-full min-w-0 rounded border border-border bg-secondary px-1 text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+                          </label>
+                        </div>
+                      ) : (
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground" title="按入場價計算止蝕觸發價；實際成交可能有滑價">
+                          <input aria-label="Hard Stop 百分比" type="number" min="0.01" max="99.99" step="0.1"
+                            value={settings.hardStopPercent || ''}
+                            onChange={e => setSettings({ ...settings, hardStopPercent: Math.min(99.99, Math.max(0, Number(e.target.value))) })}
+                            className="h-7 w-full min-w-0 rounded border border-border bg-secondary px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+                          <span>%</span>
+                        </label>
                       )}
                     </div>
                   </div>
