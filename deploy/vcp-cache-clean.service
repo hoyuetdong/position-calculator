@@ -1,0 +1,6 @@
+[Unit]
+Description=Remove expired VCP quote cache only
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vcp-calculator
+ExecStart=/opt/vcp-calculator/venv/bin/python3 backend/maintenance.py

@@ -51,3 +51,10 @@ futu_data/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# 持久交易資料唔係 cache，唔提交
+backend/pending_stops.json*
+backend/order_history.json*
+backend/*.lock
+logs/
+*.bak
+*.backup-*

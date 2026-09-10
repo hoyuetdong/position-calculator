@@ -64,6 +64,8 @@ export async function getYahooQuote(symbol: string): Promise<YahooQuote> {
     const response = await fetch(
       `https://query1.finance.yahoo.com/v8/finance/chart/${normalized}?interval=1d&range=1d`,
       {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15000),
         headers: {
           'User-Agent': 'Mozilla/5.0',
         },
@@ -131,6 +133,8 @@ export async function getYahooKLines(
     const response = await fetch(
       `https://query1.finance.yahoo.com/v8/finance/chart/${normalized}?interval=1d&range=${range}`,
       {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15000),
         headers: {
           'User-Agent': 'Mozilla/5.0',
         },

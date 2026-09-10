@@ -3,4 +3,4 @@ uvicorn>=0.24.0
 pydantic>=2.5.0
 python-dotenv>=1.0.0
 httpx>=0.25.2
-futu-api>=3.0.0
+futu-api>=10.1.6108

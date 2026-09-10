@@ -1,0 +1,9 @@
+/opt/vcp-calculator/logs/*.log {
+    daily
+    maxsize 20M
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

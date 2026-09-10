@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from './fetchWithTimeout'
 /**
  * Client library for fetching positions from Python backend
  */
@@ -64,6 +65,9 @@ export interface PendingStopOrder {
   quantity: number
   stop_loss_price: number
   status: string
+  filled_qty?: number
+  stop_loss_placed_qty?: number
+  last_error?: string | null
 }
 
 export interface PendingStopOrdersResponse {
@@ -79,7 +83,7 @@ export interface EnvResponse {
 }
 
 export async function fetchPositions(): Promise<PositionsResponse> {
-  const response = await fetch(`/api/positions?t=${Date.now()}`, {
+  const response = await fetchWithTimeout(`/api/positions?t=${Date.now()}`, {
     cache: 'no-store',
   })
   if (!response.ok) {
@@ -90,7 +94,7 @@ export async function fetchPositions(): Promise<PositionsResponse> {
 }
 
 export async function fetchAccountBalance(): Promise<BalanceResponse> {
-  const response = await fetch('/api/balance')
+  const response = await fetchWithTimeout('/api/balance')
   if (!response.ok) {
     const error = await response.json()
     throw new Error(error.details || 'Failed to fetch account balance')
@@ -99,7 +103,7 @@ export async function fetchAccountBalance(): Promise<BalanceResponse> {
 }
 
 export async function placeOrder(order: OrderRequest): Promise<OrderResponse> {
-  const response = await fetch('/api/order', {
+  const response = await fetchWithTimeout('/api/order', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -108,13 +112,13 @@ export async function placeOrder(order: OrderRequest): Promise<OrderResponse> {
   })
   if (!response.ok) {
     const error = await response.json()
-    throw new Error(error.detail || 'Failed to place order')
+    throw new Error(error.detail || error.message || 'Failed to place order')
   }
   return response.json()
 }
 
 export async function fetchPendingStopOrders(): Promise<PendingStopOrdersResponse> {
-  const response = await fetch('/api/pending-stops')
+  const response = await fetchWithTimeout('/api/pending-stops')
   if (!response.ok) {
     const error = await response.json()
     throw new Error(error.details || 'Failed to fetch pending stop orders')
@@ -123,7 +127,7 @@ export async function fetchPendingStopOrders(): Promise<PendingStopOrdersRespons
 }
 
 export async function fetchEnv(): Promise<EnvResponse> {
-  const response = await fetch('/api/trade-env')
+  const response = await fetchWithTimeout('/api/trade-env')
   if (!response.ok) {
     const error = await response.json()
     throw new Error(error.details || 'Failed to fetch env')
@@ -132,7 +136,7 @@ export async function fetchEnv(): Promise<EnvResponse> {
 }
 
 export async function setEnv(tradeEnv: string): Promise<EnvResponse> {
-  const response = await fetch('/api/trade-env', {
+  const response = await fetchWithTimeout('/api/trade-env', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { getYahooKLines } from '@/lib/yahooFinanceData'
 
@@ -44,7 +45,7 @@ export async function GET(
 
       const futuResponse = await fetch(
         `${backendUrl}/api/kline/${futuCode}?days=${days}&ktype=DAY`,
-        { signal: AbortSignal.timeout(15000) }
+        { cache: 'no-store', headers: { 'X-API-Key': process.env.API_SECRET || '' }, signal: AbortSignal.timeout(15000) }
       )
 
       if (!futuResponse.ok) {

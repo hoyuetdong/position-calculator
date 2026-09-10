@@ -4,6 +4,11 @@
 
 echo "停止 Position Calculator 服務..."
 
+if systemctl cat vcp-backend.service >/dev/null 2>&1; then
+    systemctl stop vcp-frontend vcp-backend
+fi
+screen -S frontend -X quit 2>/dev/null || true
+
 # 殺掉 app screen
 screen -S app -X quit 2>/dev/null && echo "✓ app screen 已停止" || echo "- app screen 未運行"
 

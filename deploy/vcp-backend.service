@@ -1,0 +1,18 @@
+[Unit]
+Description=VCP Calculator backend and stop monitor
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+[Service]
+LogNamespace=vcp
+Type=simple
+WorkingDirectory=/opt/vcp-calculator
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/vcp-calculator/venv/bin/python3 backend/main.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=45
+KillMode=control-group
+MemoryMax=1G
+[Install]
+WantedBy=multi-user.target

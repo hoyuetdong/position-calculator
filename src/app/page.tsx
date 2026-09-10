@@ -19,7 +19,7 @@ import {
   type QuoteData,
   type DataSource
 } from '@/lib/yahooAPI'
-import { fetchPositions, fetchAccountBalance, placeOrder, fetchEnv, setEnv, type BrokerPosition } from '@/lib/positionsAPI'
+import { fetchPositions, fetchAccountBalance, placeOrder, fetchEnv, setEnv, fetchPendingStopOrders, type PendingStopOrder, type BrokerPosition } from '@/lib/positionsAPI'
 import CandlestickChart from '@/components/CandlestickChart'
 import DataSourceControl from '@/components/DataSourceControl'
 
@@ -41,6 +41,8 @@ interface Settings {
   defaultRiskPercent: number
   atrMultiplier: number
   atrPeriod: number | null
+  stopMode: 'atr' | 'percent'
+  hardStopPercent: number
 }
 
 // Default ATR multiplier
@@ -203,7 +205,7 @@ function ZeroCostCalculator({
 
   // 如果有輸入持股數
   const sharesNum = parseInt(shares) || 0
-  const sharesToSell = sharesNum > 0 ? Math.round(sharesNum * sellRatio) : 0
+  const sharesToSell = sharesNum > 0 ? Math.ceil(sharesNum * sellRatio) : 0
   const zeroCostShares = sharesNum > 0 ? sharesNum - sharesToSell : 0
 
   // 格式化數字
@@ -330,25 +332,20 @@ function ZeroCostCalculator({
               {/* 按盈亏百分比由高至低排序 */}
               {usPositions
                 .map((pos, idx) => {
-                  // Calculate profit/loss if we have both cost and current price
-                  const hasPL = pos.cost_price && pos.current_price
-                  const plPercent = hasPL 
-                    ? ((pos.current_price! - pos.cost_price!) / pos.cost_price! * 100)
-                    : -999 // 没有价格数据排最后
-                  const isProfit = plPercent >= 0
-                  
-                  // 计算零成本需卖出股数 (只对盈利股票计算)
-                  const sharesToSell = isProfit && hasPL 
-                    ? Math.round(pos.quantity * (1 / (1 + plPercent / 100)))
-                    : 0
-                  const zeroCostShares = isProfit && hasPL 
-                    ? pos.quantity - sharesToSell
-                    : 0
-                  
-                  return { pos, idx, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }
+                  const hasCost = pos.cost_price !== null && Number.isFinite(pos.cost_price)
+                  const achieved = hasCost && pos.cost_price! <= 0
+                  const hasPL = hasCost && pos.cost_price! > 0 && pos.current_price !== null && pos.current_price > 0
+                  const plPercent = achieved ? 0 : hasPL
+                    ? (pos.current_price! - pos.cost_price!) / pos.cost_price! * 100 : -999
+                  const isProfit = achieved || plPercent >= 0
+                  const sharesToSell = achieved ? 0 : isProfit && hasPL
+                    ? Math.min(pos.quantity, Math.ceil(pos.quantity * pos.cost_price! / pos.current_price!)) : 0
+                  const zeroCostShares = achieved ? pos.quantity : isProfit && hasPL ? pos.quantity - sharesToSell : 0
+
+                  return { pos, idx, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }
                 })
-                .sort((a, b) => b.plPercent - a.plPercent)
-                .map(({ pos, idx, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }) => {
+                .sort((a, b) => Number(b.achieved) - Number(a.achieved) || b.plPercent - a.plPercent)
+                .map(({ pos, idx, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }) => {
                   return (
                     <div 
                       key={idx} 
@@ -367,6 +364,12 @@ function ZeroCostCalculator({
                       </div>
                       
                       {/* 右侧：零成本信息 + 盈亏 */}
+                      {achieved && <div className="text-right text-xs text-profit">
+                        <div className="font-bold text-sm">已達成零成本持倉</div>
+                        <div>需賣出 0 股 · 保留 {pos.quantity.toLocaleString()} 股</div>
+                        <div>成本 ${pos.cost_price!.toFixed(2)} · 現價 {pos.current_price === null ? '—' : `$${pos.current_price.toFixed(2)}`}</div>
+                      </div>}
+                      {!achieved && !hasPL && <span className="text-xs text-muted-foreground">成本／現價資料暫缺</span>}
                       {hasPL && (
                         <div className="flex items-center gap-4">
                           {/* 盈利且有正数才显示零成本信息 */}
@@ -447,7 +450,9 @@ export default function Home() {
     accountSize: 100000,
     defaultRiskPercent: 0.3,
     atrMultiplier: DEFAULT_ATR_MULTIPLIER,
-    atrPeriod: null
+    atrPeriod: null,
+    stopMode: 'atr',
+    hardStopPercent: 5
   })
   // Hydration fix: defer all client-side logic
   const [hydrated, setHydrated] = useState(false)
@@ -457,6 +462,22 @@ export default function Home() {
   const [futuConnected, setFutuConnected] = useState(false)
   
   // 交易環境狀態
+  const [pendingStops, setPendingStops] = useState<PendingStopOrder[]>([])
+  const [stopMonitorError, setStopMonitorError] = useState('')
+  useEffect(() => {
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    const refresh = async () => {
+      try {
+        const result = await fetchPendingStopOrders()
+        if (active) { setPendingStops(result.pending_orders); setStopMonitorError('') }
+      } catch { if (active) setStopMonitorError('止蝕監控狀態暫時讀取唔到，請檢查連線。') }
+      if (active) timer = setTimeout(refresh, 30000)
+    }
+    refresh()
+    return () => { active = false; clearTimeout(timer) }
+  }, [])
+
   const [tradeEnv, setTradeEnv] = useState<'SIMULATE' | 'REAL'>('SIMULATE')
   const [showEnvConfirm, setShowEnvConfirm] = useState(false)
   const [pendingEnvSwitch, setPendingEnvSwitch] = useState<'SIMULATE' | 'REAL' | null>(null)
@@ -468,7 +489,7 @@ export default function Home() {
       const saved = localStorage.getItem('vcp-settings')
       if (saved) {
         try {
-          setSettings(JSON.parse(saved))
+          setSettings(prev => ({ ...prev, ...JSON.parse(saved) }))
         } catch (e) {}
       }
       setHydrated(true)
@@ -580,19 +601,13 @@ export default function Home() {
       setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER }))
     }
     setEntryPrice(price.toFixed(2))
-    // Auto calculate stop loss based on ATR and direction
-    // 使用 settingsRef（避免 stale closure 問題）
-    const currentSettings = settingsRef.current
-    const currentMultiplier = currentSettings.atrMultiplier
-    if (atr) {
-      if (direction === 'LONG') {
-        const stopLossPrice = price - atr * currentMultiplier
-        setStopLoss(stopLossPrice.toFixed(2))
-      } else {
-        const stopLossPrice = price + atr * currentMultiplier
-        setStopLoss(stopLossPrice.toFixed(2))
-      }
-    }
+    // 用同一套設定計止蝕，百分比模式唔需要 ATR 資料。
+    const current = settingsRef.current
+    const distance = current.stopMode === 'percent'
+      ? price * current.hardStopPercent / 100
+      : (atr || 0) * (fromChartComponent ? current.atrMultiplier : DEFAULT_ATR_MULTIPLIER)
+    if (distance > 0) setStopLoss((price + (direction === 'LONG' ? -distance : distance)).toFixed(2))
+
   }, [atr, direction])
   
   // Initialize API connection
@@ -701,20 +716,18 @@ export default function Home() {
     }
   }, [settings.atrPeriod])
 
-  // 當 ATR 倍數或 direction 改變時，重新計算止蝕位（如果已有 entryPrice）
+  // 入場價、方向或者模式改變時重新計；手動止蝕仍然可以覆寫。
   useEffect(() => {
-    if (atr && entryPrice) {
-      const price = parseFloat(entryPrice)
-      if (direction === 'LONG') {
-        const stopLossPrice = price - atr * settings.atrMultiplier
-        setStopLoss(stopLossPrice.toFixed(2))
-      } else {
-        const stopLossPrice = price + atr * settings.atrMultiplier
-        setStopLoss(stopLossPrice.toFixed(2))
-      }
+    const price = parseFloat(entryPrice)
+    const distance = settings.stopMode === 'percent'
+      ? price * settings.hardStopPercent / 100 : (atr || 0) * settings.atrMultiplier
+    if (price > 0 && distance > 0) {
+      setStopLoss((price + (direction === 'LONG' ? -distance : distance)).toFixed(2))
+    } else if (settings.stopMode === 'percent') {
+      setStopLoss('')
     }
-  }, [settings.atrMultiplier, direction, atr])
-  
+  }, [entryPrice, settings.stopMode, settings.hardStopPercent, settings.atrMultiplier, direction, atr])
+
   // Calculations（避免 NaN：空字串當 0）
   const entryNum = parseFloat(entryPrice) || 0
   const stopNum = parseFloat(stopLoss) || 0
@@ -739,10 +752,10 @@ export default function Home() {
   
   // Suggested stop loss from ATR - based on entry price if available, otherwise last price
   const basePrice = parseFloat(entryPrice) || quoteData?.lastPrice || 0
-  const suggestedStopLoss = (atr && basePrice) 
+  const suggestedStopLoss = ((settings.stopMode === 'percent' || atr) && basePrice)
     ? direction === 'LONG'
-      ? basePrice - (atr * settings.atrMultiplier)  // Long: 止蝕喺下面
-      : basePrice + (atr * settings.atrMultiplier)  // Short: 止蝕喺上面
+      ? basePrice - ((settings.stopMode === 'percent' ? basePrice * settings.hardStopPercent / 100 : (atr || 0) * settings.atrMultiplier))  // Long: 止蝕喺下面
+      : basePrice + ((settings.stopMode === 'percent' ? basePrice * settings.hardStopPercent / 100 : (atr || 0) * settings.atrMultiplier))  // Short: 止蝕喺上面
     : null
   
   // Warnings
@@ -1007,7 +1020,6 @@ export default function Home() {
               type="button"
               onClick={() => { 
                 console.log('Header sync button clicked!'); 
-                alert('Click detect!');
                 syncBrokerPositions(); 
               }}
               disabled={syncing}
@@ -1088,7 +1100,7 @@ export default function Home() {
               </div>
               {/* Quick presets */}
               <div className="flex gap-2 mt-2">
-                {[0.3, 0.5, 1, 2].map(val => (
+                {[0.2, 0.3, 0.5, 1, 2].map(val => (
                   <button
                     key={val}
                     type="button"
@@ -1105,12 +1117,29 @@ export default function Home() {
               </div>
             </div>
             <div>
+              <label className="text-sm text-muted-foreground">止蝕模式</label>
+              <select value={settings.stopMode} onChange={e => setSettings({ ...settings, stopMode: e.target.value as 'atr' | 'percent' })}
+                className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg">
+                <option value="atr">ATR 倍數</option>
+                <option value="percent">% Hard Stop（按入場價）</option>
+              </select>
+              {settings.stopMode === 'percent' && <div className="mt-2">
+                <label className="text-sm text-muted-foreground">Hard Stop %</label>
+                <input type="number" min="0.01" max="99.99" step="0.1" value={settings.hardStopPercent || ''}
+                  onChange={e => setSettings({ ...settings, hardStopPercent: Math.min(99.99, Math.max(0, Number(e.target.value))) })}
+                  className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg" />
+                <p className="text-xs text-muted-foreground mt-1">止蝕觸發價按入場價計算；實際成交價可能有滑價。</p>
+              </div>}
+            </div>
+            <div>
               <label className="text-sm text-muted-foreground">ATR 倍數 (止蝕)</label>
               <select
+                disabled={settings.stopMode === 'percent'}
                 value={settings.atrMultiplier}
                 onChange={(e) => setSettings({ ...settings, atrMultiplier: parseFloat(e.target.value) })}
                 className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
               >
+                <option value="0.5">0.5</option>
                 <option value="1">1</option>
                 <option value="1.5">1.5</option>
                 <option value="2">2</option>
@@ -1150,7 +1179,16 @@ export default function Home() {
       
       <main className="max-w-6xl mx-auto px-4 py-8">
         {/* Tab Content */}
-        {activeTab === 'position' ? (
+        {(pendingStops.length > 0 || stopMonitorError) && <div className="my-4 p-4 rounded-xl border border-border bg-card">
+        <h3 className="font-semibold mb-2">止蝕監控</h3>
+        {stopMonitorError && <p className="text-warning text-sm">{stopMonitorError}</p>}
+        {pendingStops.map(order => <div key={order.entry_order_id} className="text-sm py-2 border-b border-border">
+          <span className="font-bold">{order.symbol}</span> · 已成交 {order.filled_qty || 0}/{order.quantity} 股 · 已掛止蝕 {order.stop_loss_placed_qty || 0} 股 · {order.status}
+          {order.last_error && <p className="text-warning">{order.last_error}</p>}
+        </div>)}
+      </div>}
+
+      {activeTab === 'position' ? (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-stretch">
           {/* Input Section */}
           <div className="lg:col-span-2 space-y-6 flex flex-col">
@@ -1261,11 +1299,7 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     setDirection('LONG')
-                    // 切換方向時重新計算止蝕
-                    if (atr && entryPrice) {
-                      const price = parseFloat(entryPrice)
-                      setStopLoss((price - atr * settings.atrMultiplier).toFixed(2))
-                    }
+
                   }}
                   className={`flex-1 py-3 rounded-lg font-medium transition-all cursor-pointer ${
                     direction === 'LONG'
@@ -1280,11 +1314,7 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     setDirection('SHORT')
-                    // 切換方向時重新計算止蝕
-                    if (atr && entryPrice) {
-                      const price = parseFloat(entryPrice)
-                      setStopLoss((price + atr * settings.atrMultiplier).toFixed(2))
-                    }
+
                   }}
                   className={`flex-1 py-3 rounded-lg font-medium transition-all cursor-pointer ${
                     direction === 'SHORT'
@@ -1394,7 +1424,7 @@ export default function Home() {
                 </div>
                 {suggestedStopLoss && (
                   <p className="text-xs text-muted-foreground">
-                    建議止蝕 (${settings.atrMultiplier}×ATR): ${suggestedStopLoss.toFixed(2)}
+                    建議止蝕 ({settings.stopMode === 'percent' ? `${settings.hardStopPercent}%` : `${settings.atrMultiplier}×ATR`}): ${suggestedStopLoss.toFixed(2)}
                     {direction === 'SHORT' && <span className="text-loss ml-2">(止蝕喺上面)</span>}
                   </p>
                 )}
@@ -1712,7 +1742,8 @@ export default function Home() {
                       {timeInForce === 'DAY' ? '當日有效' : '撤單前有效'}
                     </span>
                   </div>
-                  {stopLoss && (
+                  <p className="text-xs text-warning">美股實盤限價單：全時段（包括夜盤，須券商及股票支援）。市價／突破單及原生 STOP 止蝕：只限盤中觸發／成交。</p>
+                {stopLoss && (
                   <>
                     <div className="flex justify-between mb-2">
                       <span className="text-muted-foreground">止蝕位:</span>

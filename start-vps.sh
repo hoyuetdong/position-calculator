@@ -31,6 +31,10 @@ stop_named_screen() {
 echo
 echo -e "${YELLOW}[1/7] 停止 Backend / Frontend...${NC}"
 
+if systemctl cat vcp-backend.service >/dev/null 2>&1; then
+    systemctl stop vcp-frontend vcp-backend
+fi
+
 stop_named_screen app
 stop_named_screen frontend
 
@@ -155,12 +159,11 @@ PY
 echo
 echo -e "${GREEN}[5/7] 啟動 Backend...${NC}"
 
-screen -dmS app bash -lc \
-"cd '$SCRIPT_DIR' &&
- set -a &&
- source .env &&
- set +a &&
- exec '$SCRIPT_DIR/venv/bin/python3' backend/main.py"
+if systemctl cat vcp-backend.service >/dev/null 2>&1; then
+    systemctl start vcp-backend
+else
+    screen -dmS app bash -lc "cd '$SCRIPT_DIR' && exec '$SCRIPT_DIR/venv/bin/python3' backend/main.py"
+fi
 
 echo "Waiting for backend :8000..."
 
@@ -211,29 +214,25 @@ else
               "$SCRIPT_DIR/.next/standalone/.next/static"
     fi
 
-    {
-        echo '#!/usr/bin/env bash'
-        printf 'export HOSTNAME=%q\n' '0.0.0.0'
-        printf 'export PORT=%q\n' '3000'
-        printf 'export APP_PASSWORD=%q\n' "${APP_PASSWORD:-}"
-        printf 'export PYTHON_API_URL=%q\n' "${PYTHON_API_URL:-}"
-        printf 'export API_SECRET=%q\n' "${API_SECRET:-}"
-        printf 'cd %q\n' "$SCRIPT_DIR/.next/standalone"
-        echo 'exec node server.js'
-    } > /tmp/start-position-frontend.sh
+    if systemctl cat vcp-frontend.service >/dev/null 2>&1; then
+        systemctl start vcp-frontend
+    else
+        screen -dmS frontend bash "$SCRIPT_DIR/run-frontend.sh"
+    fi
 
-    chmod +x /tmp/start-position-frontend.sh
-
-    screen -dmS frontend bash -lc \
-        'exec /tmp/start-position-frontend.sh'
-
+    FRONTEND_OK=0
     for i in {1..20}; do
         if curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
+            FRONTEND_OK=1
             echo -e "${GREEN}✓ Frontend ready${NC}"
             break
         fi
         sleep 1
     done
+    if [ "$FRONTEND_OK" != "1" ]; then
+        echo "ERROR: Frontend did not become ready"
+        exit 1
+    fi
 fi
 
 

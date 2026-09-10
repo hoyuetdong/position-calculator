@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { getYahooQuoteWithMA } from '@/lib/yahooFinanceData'
 
@@ -48,7 +49,7 @@ export async function GET(
 
       try {
         const futuResponse = await fetch(`${backendUrl}/api/quote/${futuCode}`, {
-          signal: AbortSignal.timeout(15000),  // 增加 timeout，因為要拎 K 線數據
+          cache: 'no-store', headers: { 'X-API-Key': process.env.API_SECRET || '' }, signal: AbortSignal.timeout(15000),  // 增加 timeout，因為要拎 K 線數據
         })
 
         console.log(`[Quote API] Backend response status: ${futuResponse.status}`)
