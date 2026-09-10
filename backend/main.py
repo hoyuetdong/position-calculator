@@ -1333,6 +1333,7 @@ def health():
 @app.on_event("startup")
 async def startup_event():
     """App啟動時 load 舊有 pending stops 並啟動 background monitor."""
+    import futu  # SDK 初始化失敗時唔可以顯示服務正常
     print("[Startup] Step 1: Loading pending stops...")
     # 從 file load 舊有既 pending stop orders
     global _instance_lock

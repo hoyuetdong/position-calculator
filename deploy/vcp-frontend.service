@@ -3,6 +3,7 @@ Description=VCP Calculator frontend
 After=network-online.target vcp-backend.service
 StartLimitIntervalSec=0
 [Service]
+User=root
 LogNamespace=vcp
 Type=simple
 WorkingDirectory=/opt/vcp-calculator
