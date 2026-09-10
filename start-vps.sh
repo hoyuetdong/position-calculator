@@ -170,7 +170,7 @@ echo "Waiting for backend :8000..."
 BACKEND_OK=0
 
 for i in {1..25}; do
-    if curl -fsS http://127.0.0.1:8000/api/env >/dev/null 2>&1; then
+    if curl --max-time 2 -fsS http://127.0.0.1:8000/api/env >/dev/null 2>&1; then
         BACKEND_OK=1
         break
     fi
@@ -222,7 +222,7 @@ else
 
     FRONTEND_OK=0
     for i in {1..20}; do
-        if curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
+        if [[ "$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" =~ ^(200|401)$ ]]; then
             FRONTEND_OK=1
             echo -e "${GREEN}✓ Frontend ready${NC}"
             break
