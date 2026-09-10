@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location('broker_main', ROOT / 'main.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -33,6 +34,9 @@ class Stops(unittest.TestCase):
         m._ORDER_HISTORY_FILE = Path(self.temp.name) / 'order_history.json'
         m._pending_stop_orders = {}
         m._order_snapshots = {}
+        m._broker_io = m.BrokerIO()
+        m._push_inbox = m.PushInbox()
+        m._push_fresh = set()
         self.info = dict(symbol='AAPL', quantity=10, stop_loss_price=90, acc_id=42, trd_env='REAL', direction='LONG')
         m._add_pending_stop_order('entry', self.info.copy())
         self.query = patch.object(m, '_query_order_status_and_fill').start()
@@ -284,6 +288,34 @@ class Stops(unittest.TestCase):
         with patch.dict(sys.modules, {'futu': types.SimpleNamespace(RET_OK=0, OpenSecTradeContext=Context)}), patch.object(m, '_broker_order_snapshot', return_value=(existing, None)):
             self.assertEqual(m._stop_capacity('localhost', 1, self.info, 3), 'available')
             with self.assertRaises(RuntimeError): m._stop_capacity('localhost', 1, self.info, 4)
+
+    def test_push_wakes_tracking_but_never_trusts_fill_amount(self):
+        m._pending_stop_orders['entry']['next_retry_at'] = 9999999999
+        for _ in range(100): m._push_inbox.put('entry')
+        self.assertEqual(m._drain_trade_push('localhost', 1), {'entry'})
+        self.assertEqual(m._pending_stop_orders['entry']['filled_qty'], 0)
+        self.assertEqual(m._pending_stop_orders['entry']['next_retry_at'], 0)
+        self.place.assert_not_called()
+        self.tick()
+        self.assertEqual(self.place.call_count, 1)
+
+    def test_reconnect_wakes_all_accounts_without_placing(self):
+        m._push_inbox.put()
+        self.assertEqual(m._drain_trade_push('localhost', 1), {'entry'})
+        self.assertIn((42, 'REAL'), m._push_fresh)
+        self.place.assert_not_called()
+
+    def test_local_rate_deferral_keeps_automatic_retry_enabled(self):
+        self.place.return_value = dict(success=False, deferred=True, error='cooldown')
+        for _ in range(10):
+            self.retry_now(); self.tick()
+        info = m._pending_stop_orders['entry']
+        self.assertEqual(info['status'], 'RETRY')
+        self.assertIsNone(info['stop_intent'])
+        self.assertEqual(info['stop_loss_retry_count'], 0)
+        self.place.return_value = dict(success=True, stop_order_id='confirmed')
+        self.retry_now(); self.tick()
+        self.assertFalse(m._pending_stop_orders)
 
     def test_entry_limit_sessions_and_types(self):
         patch.stopall()

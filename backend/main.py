@@ -22,6 +22,7 @@ import logging
 import copy
 import math
 import tempfile
+from broker_io import BrokerIO, Deferred, PushInbox
 from io import StringIO
 from dotenv import load_dotenv
 
@@ -153,6 +154,95 @@ _pending_stop_orders: Dict[str, Dict] = {}
 _pending_stop_lock = threading.RLock()  # 用 RLock 避免同一 thread 內重入死鎖
 _stop_execution_lock = threading.RLock()
 _order_snapshots = {}
+_broker_io = BrokerIO()
+_push_inbox = PushInbox()
+_push_contexts = {}
+_push_retry_at = {}
+_push_fresh = set()
+_push_last_received = 0.0
+
+
+class _ManagedContext:
+    def __init__(self, context, host, port, market, priority=False):
+        self.context, self.host, self.port, self.market, self.priority = context, host, port, market, priority
+
+    def __getattr__(self, name):
+        if name not in BrokerIO.LIMITS:
+            return getattr(self.context, name)
+        def call(*args, **kwargs):
+            if args:
+                positional = {'unlock_trade': 'password', 'get_market_snapshot': 'code_list', 'subscribe': 'code_list'}
+                if name not in positional or len(args) != 1:
+                    raise ValueError('共用 API 入口需要具名參數')
+                kwargs[positional[name]] = args[0]
+            if name in BrokerIO.TTL:
+                requested_fresh = kwargs.pop('refresh_cache', False)
+                result = _broker_io.read(self.context, name, self.host, self.port, self.market,
+                    priority=self.priority, fresh=self.priority and requested_fresh, **kwargs)
+                if result[0] != 0 and any(word in str(result[1]).lower() for word in ('频率', '頻率', 'frequency', 'rate limit', 'too frequent')):
+                    raise Deferred('券商暫時限頻，已安排冷卻後再試')
+                return result
+            return _broker_io.command(self.context, name, self.host, self.port,
+                priority=self.priority, **kwargs)
+        return call
+
+
+def _ensure_push_contexts(host, port):
+    import futu
+    class OrderPush(futu.TradeOrderHandlerBase):
+        def on_recv_rsp(self, rsp_pb):
+            ret, data = super().on_recv_rsp(rsp_pb)
+            if ret == futu.RET_OK:
+                for _, row in data.iterrows():
+                    _push_inbox.put(row.get('order_id'))
+            return ret, data
+    class DealPush(futu.TradeDealHandlerBase):
+        def on_recv_rsp(self, rsp_pb):
+            ret, data = super().on_recv_rsp(rsp_pb)
+            if ret == futu.RET_OK:
+                for _, row in data.iterrows():
+                    _push_inbox.put(row.get('order_id'))
+            return ret, data
+    class PushContext(futu.OpenSecTradeContext):
+        def on_api_socket_reconnected(self):
+            result = super().on_api_socket_reconnected()
+            _push_inbox.put()
+            return result
+    for market in ('US', 'HK'):
+        if market in _push_contexts or time.monotonic() < _push_retry_at.get(market, 0):
+            continue
+        context = None
+        try:
+            context = PushContext(filter_trdmarket=market, host=host, port=port)
+            context.set_handler(OrderPush())
+            context.set_handler(DealPush())
+            _push_contexts[market] = context
+            _push_inbox.put()
+        except Exception:
+            if context is not None:
+                context.close()
+            _push_retry_at[market] = time.monotonic() + 60
+            logging.exception('交易推送連線未能建立，暫用定期核對')
+
+
+def _drain_trade_push(host, port):
+    global _push_last_received
+    ids, reconnect = _push_inbox.drain()
+    if not ids and not reconnect:
+        return set()
+    _push_last_received = time.time()
+    pending = _get_pending_stop_orders()
+    # ID 只用作喚醒，實際資料仍按原帳戶查詢，唔信任重複／亂序推送嘅股數。
+    affected = {key: info for key, info in pending.items() if reconnect or key in ids
+        or ids.intersection(info.get('stop_order_ids', [])) or info.get('stop_intent')}
+    # 外部平倉／止蝕推送亦可能影響持倉安全，所以清除讀取快取。
+    _broker_io.invalidate(host, port, history=reconnect)
+    _order_snapshots.clear()
+    for key, info in affected.items():
+        _push_fresh.add((info.get('acc_id'), info.get('trd_env')))
+        _update_pending_stop_order(key, {'next_retry_at': 0})
+    return set(affected)
+
 
 
 def _broker_order_snapshot(host, port, market, acc_id, trd_env, history=False):
@@ -161,19 +251,22 @@ def _broker_order_snapshot(host, port, market, acc_id, trd_env, history=False):
     key = (host, port, market, acc_id, trd_env, history)
     now = time.monotonic()
     cached = _order_snapshots.get(key)
-    if cached and now - cached[0] < (60 if history else 30):
+    if cached and now - cached[0] < (300 if history else 5):
         return cached[1], cached[2]
     rows, error = {}, None
     ctx = None
     try:
-        ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+        ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market, priority=True)
         kwargs = dict(trd_env=trd_env, acc_id=acc_id)
         if history:
             # 包含跨日、撤單、失效紀錄；活躍 GTC 舊單由當前清單取得。
             kwargs['start'] = (datetime.now(timezone.utc) - timedelta(days=89)).strftime('%Y-%m-%d')
             ret, data = ctx.history_order_list_query(**kwargs)
         else:
-            ret, data = ctx.order_list_query(**kwargs, refresh_cache=True)
+            urgent = (acc_id, trd_env) in _push_fresh
+            ret, data = ctx.order_list_query(**kwargs, refresh_cache=urgent)
+            if ret == futu.RET_OK:
+                _push_fresh.discard((acc_id, trd_env))
         if ret != futu.RET_OK:
             error = str(data)
         elif data is not None:
@@ -459,7 +552,7 @@ def _query_futu_open_orders(host: str, port: int, trd_env: str) -> Dict[str, Dic
 
     # 遍歷 HK 和 US 市場
     for market in [futu.TrdMarket.US, futu.TrdMarket.HK]:
-        ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+        ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market)
         try:
             ret_acc, acc_list = ctx.get_acc_list()
             if ret_acc != futu.RET_OK:
@@ -688,7 +781,7 @@ def _place_stop_order(
     else:
         market = futu.TrdMarket.US
     
-    ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+    ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market, priority=True)
     try:
         # Unlock trade
         if trade_pwd:
@@ -703,19 +796,22 @@ def _place_stop_order(
         trd_side = futu.TrdSide.BUY if direction == "SHORT" else futu.TrdSide.SELL
         
         # Place STOP order (GTC = Good Till Cancelled, 撤單前有效)
-        ret, data = ctx.place_order(
-            price=0,  # STOP orders don't use price, use aux_price as trigger
-            qty=quantity,
-            code=futu_code,
-            trd_side=trd_side,
-            order_type=futu.OrderType.STOP,
-            trd_env=trd_env_enum,
-            acc_id=acc_id,
-            aux_price=stop_loss_price,  # Trigger price
-            time_in_force=futu.TimeInForce.GTC,  # 撤單前有效
-            remark=remark,
-        )
-        
+        try:
+            ret, data = ctx.place_order(
+                price=0,  # STOP orders don't use price, use aux_price as trigger
+                qty=quantity,
+                code=futu_code,
+                trd_side=trd_side,
+                order_type=futu.OrderType.STOP,
+                trd_env=trd_env_enum,
+                acc_id=acc_id,
+                aux_price=stop_loss_price,  # Trigger price
+                time_in_force=futu.TimeInForce.GTC,  # 撤單前有效
+                remark=remark,
+            )
+        except Deferred as exc:
+            return {'success': False, 'deferred': True, 'error': str(exc)}
+
         print(f"[StopMonitor] STOP order result: ret={ret}, data={data}")
         
         if ret != futu.RET_OK:
@@ -734,6 +830,8 @@ def _place_stop_order(
             "stop_order_id": stop_order_id,
             "message": f"STOP order placed: {side_str} {quantity} @ ${stop_loss_price}"
         }
+    except Deferred as exc:
+        return {'success': False, 'deferred': True, 'error': str(exc)}
     finally:
         ctx.close()
 
@@ -746,7 +844,7 @@ def _stop_capacity(host, port, info, quantity):
     rows, error = _broker_order_snapshot(host, port, market, info['acc_id'], info['trd_env'])
     if error:
         raise RuntimeError('補止蝕前未能核對已有訂單：' + error)
-    ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+    ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market, priority=True)
     try:
         ret, positions = ctx.position_list_query(trd_env=info['trd_env'], acc_id=info['acc_id'], refresh_cache=True)
         if ret != futu.RET_OK:
@@ -860,6 +958,9 @@ def _monitor_one_locked(host, port, entry_order_id, info):
                 "status": "partial", "last_error": None})
             if terminal or filled >= info["quantity"]:
                 _remove_pending_stop_order(entry_order_id)
+        elif result.get('deferred'):
+            _update_pending_stop_order(entry_order_id, {'stop_intent': None, 'status': 'RETRY',
+                'last_error': result['error'], 'next_retry_at': time.time() + 30})
         elif result.get("ambiguous") or result.get("success"):
             _update_pending_stop_order(entry_order_id, {"status": "SUBMISSION_UNKNOWN", "last_error": result.get("error", "缺少止蝕單 ID"), "next_retry_at": time.time() + 60})
         else:
@@ -879,6 +980,15 @@ def _monitor_loop(host: str, port: int, check_interval: float = 10.0):
     last_restore = 0.0
     while _monitor_running.is_set():
         _monitor_last_tick = time.time()
+        if _push_inbox.event.is_set():
+            time.sleep(0.2)  # 合併短時間內嘅訂單及成交推送。
+        urgent_ids = set()
+        try:
+            _ensure_push_contexts(host, port)
+            with _stop_execution_lock:
+                urgent_ids = _drain_trade_push(host, port)
+        except Exception:
+            logging.exception('交易推送處理失敗，繼續定期核對')
         if time.time() - last_restore >= 300:
             try:
                 _restore_pending_stops_from_history(host, port, _get_trade_env(), query_legacy=True)
@@ -886,7 +996,9 @@ def _monitor_loop(host: str, port: int, check_interval: float = 10.0):
             except Exception:
                 logging.exception("舊訂單核對暫時失敗，下次重試")
                 last_restore = time.time() - 240
-        for key, info in _get_pending_stop_orders().items():
+        work = sorted(_get_pending_stop_orders().items(),
+            key=lambda item: (item[0] not in urgent_ids, item[1].get('filled_qty', 0) <= item[1].get('stop_loss_placed_qty', 0)))
+        for key, info in work:
             if not _monitor_running.is_set():
                 break
             try:
@@ -897,7 +1009,7 @@ def _monitor_loop(host: str, port: int, check_interval: float = 10.0):
                     _update_pending_stop_order(key, {"last_error": str(exc), "next_retry_at": time.time() + 60})
                 except Exception:
                     logging.exception("止蝕紀錄寫入失敗")
-        time.sleep(check_interval)
+        _push_inbox.event.wait(check_interval)
 
 
 def start_background_monitor(host: str, port: int):
@@ -924,9 +1036,13 @@ def stop_background_monitor():
     global _monitor_thread
     
     _monitor_running.clear()
+    _push_inbox.event.set()
     if _monitor_thread is not None:
         _monitor_thread.join(timeout=5)
         _monitor_thread = None
+    for context in list(_push_contexts.values()):
+        context.close()
+    _push_contexts.clear()
     print("[StopMonitor] Background monitor stopped")
 
 
@@ -1116,7 +1232,7 @@ def _place_order(
         market = futu.TrdMarket.US
     
     # Create trade context
-    ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+    ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market)
     try:
         # Unlock trade first
         if not _unlock_trade(ctx, trade_pwd):
@@ -1285,12 +1401,8 @@ def _fetch_account_balance(host: str, port: int, trade_pwd: str = "") -> Optiona
         raise ImportError("futu-api not installed. Run: pip install futu-api")
 
     # Use US market to get USD account
-    ctx = futu.OpenSecTradeContext(filter_trdmarket=futu.TrdMarket.US, host=host, port=port)
+    ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=futu.TrdMarket.US, host=host, port=port), host, port, futu.TrdMarket.US)
     try:
-        if trade_pwd:
-            ret_unlock, _ = ctx.unlock_trade(trade_pwd)
-            if ret_unlock != futu.RET_OK:
-                raise ValueError("unlock_trade failed — check your trading password")
 
         ret_acc, acc_list = ctx.get_acc_list()
         if ret_acc != futu.RET_OK:
@@ -1428,7 +1540,9 @@ def health():
     age = time.time() - _monitor_last_tick if _monitor_last_tick else 0
     if not alive or age > 180:
         raise HTTPException(status_code=503, detail="止蝕監控未運行／逾時")
-    return {"ok": True, "monitor_age_seconds": round(age), "pending_count": len(_get_pending_stop_orders())}
+    return {"ok": True, "monitor_age_seconds": round(age), "pending_count": len(_get_pending_stop_orders()),
+        "broker_io": _broker_io.stats(), "push_contexts": len(_push_contexts),
+        "push_received": _push_inbox.received, "last_push_at": _push_last_received}
 
 
 @app.on_event("startup")
@@ -1493,13 +1607,8 @@ def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
         market_name = "HK" if market == futu.TrdMarket.HK else "US"
         print(f"[Futu] Trying {market_name} market...")
         try:
-            ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+            ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market)
             try:
-                if trade_pwd:
-                    ret_unlock, _ = ctx.unlock_trade(trade_pwd)
-                    if ret_unlock != futu.RET_OK:
-                        print(f"[Futu] unlock_trade failed for {market_name}, skipping market")
-                        continue
 
                 ret_acc, acc_list = ctx.get_acc_list()
                 if ret_acc != futu.RET_OK:
@@ -1548,6 +1657,8 @@ def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
                         })
             finally:
                 ctx.close()
+        except Deferred:
+            raise
         except Exception as e:
             print(f"[Futu] Error fetching {market_name} positions: {e}")
             continue
@@ -1742,6 +1853,8 @@ def place_order(order: OrderRequest):
             message=result.get("message", "Order placed successfully"),
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
+    except Deferred as e:
+        raise HTTPException(status_code=429, detail=str(e), headers={'Retry-After': '30'})
     except ImportError as e:
         print(f"[Order] ERROR: futu-api import failed: {e}")
         raise HTTPException(status_code=500, detail=f"futu-api not installed: {e}")
@@ -1909,34 +2022,8 @@ def get_stock_quote(codes: str):
 
         print(f"[Quote] Creating OpenQuoteContext...", flush=True)
         sys.stdout.flush()
-        ctx = futu.OpenQuoteContext(host=host, port=port)
+        ctx = _ManagedContext(futu.OpenQuoteContext(host=host, port=port), host, port, 'QUOTE')
         try:
-            # 先 subscribe 股票行情（某些市場需要）
-            print(f"[Quote] Subscribing to {len(code_list)} securities...", flush=True)
-            sys.stdout.flush()
-            
-            # 確定市場類型
-            market_list = set()
-            for code in code_list:
-                if code.startswith("HK."):
-                    market_list.add(futu.Market.HK)
-                elif code.startswith("US."):
-                    market_list.add(futu.Market.US)
-                elif code.startswith("SH."):
-                    market_list.add(futu.Market.SH)
-                elif code.startswith("SZ."):
-                    market_list.add(futu.Market.SZ)
-            
-            # Subscribe 每個市場
-            for market in market_list:
-                ret_sub, _ = ctx.subscribe(code_list, market)
-                print(f"[Quote] Subscribe ret={ret_sub}", flush=True)
-                sys.stdout.flush()
-            
-            # 等一下俾 OpenD 推送數據
-            import time
-            time.sleep(0.5)
-            
             # 用 get_market_snapshot 拎行情
             print(f"[Quote] Calling get_market_snapshot...", flush=True)
             sys.stdout.flush()
@@ -2153,7 +2240,7 @@ def get_stock_kline(
         elif ktype.upper() == "MONTH":
             kt = futu.KLType.K_MON
         
-        ctx = futu.OpenQuoteContext(host=host, port=port)
+        ctx = _ManagedContext(futu.OpenQuoteContext(host=host, port=port), host, port, 'QUOTE')
         try:
             print(f"[KLine] Calling request_history_kline...", flush=True)
             sys.stdout.flush()
