@@ -465,6 +465,10 @@ export default function Home() {
   // 交易環境狀態
   const [pendingStops, setPendingStops] = useState<PendingStopOrder[]>([])
   const [stopMonitorError, setStopMonitorError] = useState('')
+  const [stopMonitorExpanded, setStopMonitorExpanded] = useState(false)
+  const stopMonitorNeedsAttention = Boolean(stopMonitorError) || pendingStops.some(order =>
+    Boolean(order.last_error) || !['pending', 'partial', 'SUBMITTING_STOP'].includes(order.status))
+  const showStopMonitorDetails = stopMonitorNeedsAttention || stopMonitorExpanded
   useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout>
@@ -1130,15 +1134,6 @@ export default function Home() {
       
       <main className="max-w-6xl mx-auto px-4 py-8">
         {/* Tab Content */}
-        {(pendingStops.length > 0 || stopMonitorError) && <div className="my-4 p-4 rounded-xl border border-border bg-card">
-        <h3 className="font-semibold mb-2">止蝕監控</h3>
-        {stopMonitorError && <p className="text-warning text-sm">{stopMonitorError}</p>}
-        {pendingStops.map(order => <div key={order.entry_order_id} className="text-sm py-2 border-b border-border">
-          <span className="font-bold">{order.symbol}</span> · 已成交 {order.filled_qty || 0}/{order.quantity} 股 · 已掛止蝕 {order.stop_loss_placed_qty || 0} 股 · {order.status}
-          {order.last_error && <p className="text-warning">{order.last_error}</p>}
-        </div>)}
-      </div>}
-
       {activeTab === 'position' ? (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-stretch">
           {/* Input Section */}
@@ -1559,6 +1554,30 @@ export default function Home() {
               </div>
             )}
             
+            {/* 止蝕監控：右欄細卡，有問題時保持展開。 */}
+            <section className={`rounded-xl border bg-card ${stopMonitorNeedsAttention ? 'border-warning/50' : 'border-border'}`} aria-label="止蝕監控">
+              <button type="button" aria-expanded={showStopMonitorDetails} aria-controls="stop-monitor-details"
+                onClick={() => setStopMonitorExpanded(expanded => !expanded)}
+                className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left">
+                <span className="text-sm font-semibold">止蝕監控</span>
+                <span className={`text-xs ${stopMonitorNeedsAttention ? 'text-warning' : 'text-muted-foreground'}`}>
+                  {stopMonitorNeedsAttention ? '需要留意' : pendingStops.length ? `${pendingStops.length} 張追蹤中` : '暫無待處理止蝕'}
+                  <span className="ml-2" aria-hidden="true">{showStopMonitorDetails ? '▴' : '▾'}</span>
+                </span>
+              </button>
+              {showStopMonitorDetails && <div id="stop-monitor-details" className="border-t border-border px-4 pb-3 text-xs">
+                {stopMonitorError && <p role="status" className="pt-3 text-warning">{stopMonitorError}</p>}
+                {!stopMonitorError && pendingStops.length === 0 && <p className="pt-3 text-muted-foreground">暫無待處理止蝕</p>}
+                <div className="max-h-64 overflow-y-auto">
+                  {pendingStops.map(order => <div key={order.entry_order_id} className="space-y-1 pt-3 break-words">
+                    <div className="flex items-center justify-between gap-2"><span className="font-semibold">{order.symbol}</span><span className="text-muted-foreground">{order.status}</span></div>
+                    <p className="text-muted-foreground">已成交 {order.filled_qty || 0}/{order.quantity} 股 · 已掛止蝕 {order.stop_loss_placed_qty || 0} 股</p>
+                    {order.last_error && <p className="text-warning">{order.last_error}</p>}
+                  </div>)}
+                </div>
+              </div>}
+            </section>
+
             {/* History */}
             {positions.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-6">
