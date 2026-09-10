@@ -47,6 +47,7 @@ interface Settings {
 
 // Default ATR multiplier
 const DEFAULT_ATR_MULTIPLIER = 1.5
+const ATR_MULTIPLIERS = [0.3, 0.4, 0.5, 1, 1.5]
 
 // Data source switcher component
 // R-multiples visualization
@@ -489,7 +490,13 @@ export default function Home() {
       const saved = localStorage.getItem('vcp-settings')
       if (saved) {
         try {
-          setSettings(prev => ({ ...prev, ...JSON.parse(saved) }))
+          const parsed = JSON.parse(saved)
+          const savedMultiplier = Number(parsed.atrMultiplier)
+          setSettings(prev => ({
+            ...prev,
+            ...parsed,
+            atrMultiplier: ATR_MULTIPLIERS.includes(savedMultiplier) ? savedMultiplier : DEFAULT_ATR_MULTIPLIER,
+          }))
         } catch (e) {}
       }
       setHydrated(true)
@@ -1347,7 +1354,7 @@ export default function Home() {
                             <select aria-label="ATR 倍數" value={settings.atrMultiplier}
                               onChange={e => setSettings({ ...settings, atrMultiplier: Number(e.target.value) })}
                               className="h-7 w-full min-w-0 rounded border border-border bg-secondary px-1 text-foreground focus:outline-none focus:ring-1 focus:ring-primary">
-                              {[0.5, 1, 1.5, 2, 2.5, 3].map(value => <option key={value} value={value}>{value}</option>)}
+                              {ATR_MULTIPLIERS.map(value => <option key={value} value={value}>{value}</option>)}
                             </select>
                           </label>
                           <label className="flex min-w-0 flex-1 items-center gap-1">
