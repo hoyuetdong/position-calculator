@@ -1245,13 +1245,13 @@ export default function Home() {
                     setDirection('LONG')
 
                   }}
-                  className={`flex-1 py-3 rounded-lg font-medium transition-all cursor-pointer ${
+                  className={`flex flex-1 items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
                     direction === 'LONG'
                       ? 'bg-profit text-black shadow-lg'
                       : 'bg-secondary text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  <TrendingUp className="w-5 h-5 mx-auto mb-1" />
+                  <TrendingUp className="w-4 h-4 shrink-0" />
                   Long (做多)
                 </button>
                 <button
@@ -1260,13 +1260,13 @@ export default function Home() {
                     setDirection('SHORT')
 
                   }}
-                  className={`flex-1 py-3 rounded-lg font-medium transition-all cursor-pointer ${
+                  className={`flex flex-1 items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
                     direction === 'SHORT'
                       ? 'bg-loss text-white shadow-lg'
                       : 'bg-secondary text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  <TrendingDown className="w-5 h-5 mx-auto mb-1" />
+                  <TrendingDown className="w-4 h-4 shrink-0" />
                   Short (做空)
                 </button>
               </div>
