@@ -606,17 +606,13 @@ export default function Home() {
   }, [])
   
   // Handle chart click - set entry price and auto-calculate stop loss
-  const handleChartClick = useCallback((price: number, fromChartComponent: boolean = false) => {
-    // 如果係從 EMA/MAs 按鈕設定 entry，先 reset ATR multiplier 到 default
-    if (!fromChartComponent) {
-      setSettings(prev => ({ ...prev, atrMultiplier: DEFAULT_ATR_MULTIPLIER }))
-    }
+  const handleChartClick = useCallback((price: number) => {
     setEntryPrice(price.toFixed(2))
     // 用同一套設定計止蝕，百分比模式唔需要 ATR 資料。
     const current = settingsRef.current
     const distance = current.stopMode === 'percent'
       ? price * current.hardStopPercent / 100
-      : (atr || 0) * (fromChartComponent ? current.atrMultiplier : DEFAULT_ATR_MULTIPLIER)
+      : (atr || 0) * current.atrMultiplier
     if (distance > 0) setStopLoss((price + (direction === 'LONG' ? -distance : distance)).toFixed(2))
 
   }, [atr, direction])
