@@ -31,7 +31,7 @@ from typing import List, Dict, Tuple, Optional
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 from functools import wraps
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 _HKD_USD_FALLBACK = 1 / 7.78
 
@@ -151,6 +151,44 @@ _ORDER_HISTORY_FILE = Path(__file__).parent / "order_history.json"
 # Value: dict with stop_loss_price, quantity, symbol, stop_loss_placed_qty, filled_qty, etc.
 _pending_stop_orders: Dict[str, Dict] = {}
 _pending_stop_lock = threading.RLock()  # 用 RLock 避免同一 thread 內重入死鎖
+_stop_execution_lock = threading.RLock()
+_order_snapshots = {}
+
+
+def _broker_order_snapshot(host, port, market, acc_id, trd_env, history=False):
+    """同帳戶共用查單結果，唔會因為多咗追蹤單而逐張打爆限頻。"""
+    import futu
+    key = (host, port, market, acc_id, trd_env, history)
+    now = time.monotonic()
+    cached = _order_snapshots.get(key)
+    if cached and now - cached[0] < (60 if history else 30):
+        return cached[1], cached[2]
+    rows, error = {}, None
+    ctx = None
+    try:
+        ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+        kwargs = dict(trd_env=trd_env, acc_id=acc_id)
+        if history:
+            # 包含跨日、撤單、失效紀錄；活躍 GTC 舊單由當前清單取得。
+            kwargs['start'] = (datetime.now(timezone.utc) - timedelta(days=89)).strftime('%Y-%m-%d')
+            ret, data = ctx.history_order_list_query(**kwargs)
+        else:
+            ret, data = ctx.order_list_query(**kwargs, refresh_cache=True)
+        if ret != futu.RET_OK:
+            error = str(data)
+        elif data is not None:
+            rows = {str(row['order_id']): dict(row) for _, row in data.iterrows()}
+    except Exception as exc:
+        error = str(exc)
+    finally:
+        if ctx is not None:
+            ctx.close()
+    _order_snapshots[key] = (now, rows, error)
+    # 清除已冇使用嘅帳戶結果，唔累積長期快取。
+    for old_key, value in list(_order_snapshots.items()):
+        if now - value[0] > 300:
+            _order_snapshots.pop(old_key, None)
+    return rows, error
 
 # Background monitor thread (singleton)
 _monitor_thread: Optional[threading.Thread] = None
@@ -572,59 +610,48 @@ def _remove_pending_stop_order(entry_order_id: str) -> None:
     """從隊列移除已完成觸發止蝕單，同時更新 file."""
     with _pending_stop_lock:
         if entry_order_id in _pending_stop_orders:
-            _sync_history(entry_order_id, {**_pending_stop_orders[entry_order_id], "completed": True})
+            info = _pending_stop_orders[entry_order_id]
+            _sync_history(entry_order_id, {**info, "completed": True,
+                "status": info["status"] if info.get("status") in {"NO_POSITION", "CLOSED_BY_USER"} else ("PROTECTED" if info.get("filled_qty", 0) else "CLOSED_UNFILLED"),
+                "completed_at": datetime.now(timezone.utc).isoformat(), "last_error": None})
             del _pending_stop_orders[entry_order_id]
             _save_pending_stops_to_file()
             print(f"[StopMonitor] Removed pending stop order: entry_id={entry_order_id}")
 
 
 def _query_order_status_and_fill(host: str, port: int, order_id: str, acc_id: int, trd_env: str, created_at: str = "") -> Optional[Dict]:
-    import futu
     if not acc_id:
         return None
-    for market in [futu.TrdMarket.US, futu.TrdMarket.HK]:
-        ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
-        try:
-            ret, data = ctx.order_list_query(trd_env=trd_env, acc_id=acc_id, order_id=order_id, refresh_cache=True)
-            if ret == futu.RET_OK and data is not None:
-                for _, row in data.iterrows():
-                    if str(row.get("order_id")) == str(order_id):
-                        return {"status": str(row["order_status"]).upper(),
-                                "fill_qty": int(float(row.get("dealt_qty", 0) or 0)),
-                                "order_qty": int(float(row.get("qty", 0) or 0)), "acc_id": acc_id}
-            # 當日清單冇舊單時，查歷史；唔會將 API 錯誤當成取消。
-            ret, data = ctx.history_order_list_query(trd_env=trd_env, acc_id=acc_id, start=created_at[:10] if created_at else "")
-            if ret == futu.RET_OK and data is not None:
-                for _, row in data.iterrows():
-                    if str(row.get("order_id")) == str(order_id):
-                        return {"status": str(row["order_status"]).upper(),
-                                "fill_qty": int(float(row.get("dealt_qty", 0) or 0)),
-                                "order_qty": int(float(row.get("qty", 0) or 0)), "acc_id": acc_id}
-        finally:
-            ctx.close()
+    info = _get_pending_stop_orders().get(order_id, {})
+    market = "HK" if _to_futu_code(info.get("symbol", "AAPL")).startswith("HK.") else "US"
+    errors = []
+    for history in (False, True):
+        rows, error = _broker_order_snapshot(host, port, market, acc_id, trd_env, history)
+        row = rows.get(str(order_id))
+        if row is not None:
+            return {"status": str(row["order_status"]).upper(),
+                    "fill_qty": int(float(row.get("dealt_qty", 0) or 0)),
+                    "order_qty": int(float(row.get("qty", 0) or 0)), "acc_id": acc_id}
+        if error:
+            errors.append(error)
+    if errors:
+        raise RuntimeError("券商查單暫時失敗，會自動重試：" + "；".join(dict.fromkeys(errors)))
     return None
 
 
 def _reconcile_stop(host, port, info, intent):
-    # 網絡逾時或重啟後只核對 remark，唔盲目重送。
-    import futu
-    market = futu.TrdMarket.HK if _to_futu_code(info["symbol"]).startswith("HK.") else futu.TrdMarket.US
-    ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
-    try:
-        for query in [ctx.order_list_query, ctx.history_order_list_query]:
-            ret, data = query(trd_env=info["trd_env"], acc_id=info["acc_id"])
-            if ret != futu.RET_OK or data is None:
-                continue
-            for _, row in data.iterrows():
-                if str(row.get("remark", "")) == intent["remark"]:
-                    status = str(row.get("order_status", "")).upper()
-                    if status in {"FAILED", "DISABLED", "DELETED", "CANCELLED_ALL", "CANCELLED_PART"}:
-                        return {"failed": True, "error": "券商止蝕單已取消／失效，請核對"}
-                    if status in {"SUBMITTED", "FILLED_PART", "FILLED_ALL", "WAITING_SUBMIT", "SUBMITTING"}:
-                        return {"stop_order_id": str(row["order_id"])}
-        return None
-    finally:
-        ctx.close()
+    # 查單同補單共用 snapshot；未知提交结果絕不盲目重送。
+    market = "HK" if _to_futu_code(info["symbol"]).startswith("HK.") else "US"
+    for history in (False, True):
+        rows, error = _broker_order_snapshot(host, port, market, info["acc_id"], info["trd_env"], history)
+        for row in rows.values():
+            if str(row.get("remark", "")) == intent["remark"]:
+                status = str(row.get("order_status", "")).upper()
+                if status in {"FAILED", "DISABLED", "DELETED", "CANCELLED_ALL", "CANCELLED_PART"}:
+                    return {"failed": True, "error": "券商止蝕單已取消／失效，需核對持倉後處理"}
+                if status in {"SUBMITTED", "FILLED_PART", "FILLED_ALL", "WAITING_SUBMIT", "SUBMITTING"}:
+                    return {"stop_order_id": str(row["order_id"])}
+    return None
 
 
 def _place_stop_order(
@@ -696,7 +723,11 @@ def _place_stop_order(
         
         stop_order_id = None
         if data is not None and not data.empty:
-            stop_order_id = str(data.iloc[0].get("order_id", ""))
+            row = data.iloc[0]
+            stop_order_id = str(row.get("order_id", ""))
+            if str(row.get('order_status', '')).upper() in {'FAILED', 'DISABLED', 'DELETED', 'CANCELLED_ALL'}:
+                return {'success': False, 'ambiguous': True,
+                    'error': '券商回報止蝕未生效：' + str(row.get('last_err_msg', row.get('order_status')))}
         
         return {
             "success": True,
@@ -707,7 +738,48 @@ def _place_stop_order(
         ctx.close()
 
 
+def _stop_capacity(host, port, info, quantity):
+    """補單前確認仍持倉，兼防用戶已自行掛止蝕；有疑問唔增加賣單。"""
+    import futu
+    code = _to_futu_code(info['symbol'])
+    market = 'HK' if code.startswith('HK.') else 'US'
+    rows, error = _broker_order_snapshot(host, port, market, info['acc_id'], info['trd_env'])
+    if error:
+        raise RuntimeError('補止蝕前未能核對已有訂單：' + error)
+    ctx = futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port)
+    try:
+        ret, positions = ctx.position_list_query(trd_env=info['trd_env'], acc_id=info['acc_id'], refresh_cache=True)
+        if ret != futu.RET_OK:
+            raise RuntimeError('補止蝕前未能核對持倉：' + str(positions))
+        held = 0
+        for _, row in positions.iterrows():
+            if str(row.get('code')) == code:
+                qty = float(row.get('qty', 0))
+                short = str(row.get('position_side', '')).upper() == 'SHORT' or qty < 0
+                if short == (info.get('direction') == 'SHORT'):
+                    held += abs(qty)
+        side = 'BUY' if info.get('direction') == 'SHORT' else 'SELL'
+        reserved = sum(max(0, float(row.get('qty', 0)) - float(row.get('dealt_qty', 0)))
+            for row in rows.values() if str(row.get('code')) == code and str(row.get('trd_side')) == side
+            and str(row.get('order_status')) in {'SUBMITTED', 'FILLED_PART', 'WAITING_SUBMIT', 'SUBMITTING', 'CANCELLING_PART', 'CANCELLING_ALL'})
+        if held == 0:
+            return 'flat'
+        if held - reserved < quantity:
+            raise RuntimeError('現有持倉扣除已有平倉／止蝕單後不足；暫停補單，避免重複或反向開倉')
+        return 'available'
+    finally:
+        ctx.close()
+
+
 def _monitor_one(host, port, entry_order_id, info):
+    # 手動重試同自動監控共用鎖，並重新讀取最新紀錄。
+    with _stop_execution_lock:
+        current = _get_pending_stop_orders().get(entry_order_id)
+        if current is not None:
+            _monitor_one_locked(host, port, entry_order_id, current)
+
+
+def _monitor_one_locked(host, port, entry_order_id, info):
     if info.get("status") in {"FAILED_NEED_MANUAL", "LEGACY_NEED_MANUAL"}:
         return
     if time.time() < info.get("next_retry_at", 0):
@@ -729,14 +801,22 @@ def _monitor_one(host, port, entry_order_id, info):
                 "last_error": matched.get("error") if matched else "止蝕提交結果未確認；暫停重送以免重複，請核對富途訂單",
                 "next_retry_at": time.time() + 60})
         return
-    data = _query_order_status_and_fill(host, port, entry_order_id, info["acc_id"], info["trd_env"], info.get("created_at", ""))
+    try:
+        data = _query_order_status_and_fill(host, port, entry_order_id, info["acc_id"], info["trd_env"], info.get("created_at", ""))
+    except Exception as exc:
+        _update_pending_stop_order(entry_order_id, {"status": "QUERY_RETRY", "last_error": str(exc), "next_retry_at": time.time() + 30})
+        return
     if data is None:
-        _update_pending_stop_order(entry_order_id, {"status": "QUERY_RETRY", "last_error": "暫時查唔到訂單，已保留追蹤", "next_retry_at": time.time() + 60})
+        try:
+            is_new = time.time() - datetime.fromisoformat(info.get('created_at', '')).timestamp() < 90
+        except ValueError:
+            is_new = False
+        _update_pending_stop_order(entry_order_id, {"status": "WAITING_QUERY" if is_new else "QUERY_RETRY", "last_error": "等候券商更新新訂單" if is_new else "券商當前及歷史清單未有呢個訂單 ID；如已取消並刪除紀錄，可確認停止追蹤", "next_retry_at": time.time() + 30})
         return
     filled = data["fill_qty"]
     placed = info.get("stop_loss_placed_qty", 0)
     status = data["status"]
-    terminal = status in {"FILLED_ALL", "FILLED", "CANCELLED_ALL", "CANCELLED_PART", "CANCELLED", "FAILED", "REJECTED", "DELETED"}
+    terminal = status in {"FILLED_ALL", "FILLED", "CANCELLED_ALL", "CANCELLED_PART", "CANCELLED", "FAILED", "REJECTED", "DELETED", "DISABLED", "EXPIRED"}
     if info.get("schema_version") != 2:
         if filled:
             _update_pending_stop_order(entry_order_id, {"status": "LEGACY_NEED_MANUAL", "filled_qty": filled,
@@ -745,6 +825,19 @@ def _monitor_one(host, port, entry_order_id, info):
         _update_pending_stop_order(entry_order_id, {"schema_version": 2})
     if filled > placed:
         qty = filled - placed
+        _update_pending_stop_order(entry_order_id, {"filled_qty": filled})
+        try:
+            capacity = _stop_capacity(host, port, info, qty)
+        except Exception as exc:
+            _update_pending_stop_order(entry_order_id, {"status": "POSITION_REVIEW", "last_error": str(exc), "next_retry_at": time.time() + 60})
+            return
+        if capacity == 'flat':
+            first_seen = info.get('flat_seen_at') or time.time()
+            _update_pending_stop_order(entry_order_id, {"status": "NO_POSITION", "flat_seen_at": first_seen, "last_error": "現時無對應持倉，稍後再核對，暫不補單", "next_retry_at": time.time() + 60})
+            if terminal and time.time() - first_seen >= 60:
+                _remove_pending_stop_order(entry_order_id)
+            return
+        _update_pending_stop_order(entry_order_id, {'flat_seen_at': None})
         import hashlib
         remark = "vcp-sl-" + hashlib.sha256(f"{entry_order_id}:{filled}".encode()).hexdigest()[:32]
         intent = {"remark": remark, "target_qty": filled, "quantity": qty}
@@ -756,6 +849,12 @@ def _monitor_one(host, port, entry_order_id, info):
         except Exception as exc:
             result = {"success": False, "ambiguous": True, "error": str(exc)}
         if result.get("success") and result.get("stop_order_id"):
+            # 即時加入共用快照，同一輪其他買單唔會忽略啱啱掛出嘅平倉單。
+            market = 'HK' if _to_futu_code(info['symbol']).startswith('HK.') else 'US'
+            cached = _order_snapshots.get((host, port, market, info['acc_id'], info['trd_env'], False))
+            if cached:
+                cached[1][result['stop_order_id']] = dict(code=_to_futu_code(info['symbol']), qty=qty,
+                    dealt_qty=0, order_status='SUBMITTED', trd_side='BUY' if info.get('direction') == 'SHORT' else 'SELL')
             _update_pending_stop_order(entry_order_id, {"stop_loss_placed_qty": filled, "stop_intent": None,
                 "stop_order_ids": info.get("stop_order_ids", []) + [result["stop_order_id"]],
                 "status": "partial", "last_error": None})
@@ -769,6 +868,7 @@ def _monitor_one(host, port, entry_order_id, info):
                 "status": "FAILED_NEED_MANUAL" if retries >= 5 else "RETRY",
                 "last_error": result.get("error"), "next_retry_at": time.time() + min(60, 2 ** retries)})
     elif terminal:
+        _update_pending_stop_order(entry_order_id, {"filled_qty": filled, "last_error": None})
         _remove_pending_stop_order(entry_order_id)
     else:
         _update_pending_stop_order(entry_order_id, {"status": "partial" if filled else "pending", "filled_qty": filled, "last_error": None})
@@ -1292,6 +1392,7 @@ class PendingStopOrdersResponse(BaseModel):
     success: bool
     pending_orders: List[PendingStopOrder]
     timestamp: str
+    completed_orders: List[PendingStopOrder] = []
 
 
 class SyncResponse(BaseModel):
@@ -1662,6 +1763,51 @@ def place_order(order: OrderRequest):
             raise HTTPException(status_code=500, detail=f"Failed to place order: {str(e)}")
 
 
+class StopDismissRequest(BaseModel):
+    entry_order_id: str
+    confirmed_cancelled_unfilled: bool = False
+
+
+@app.post("/api/pending-stops/dismiss", dependencies=[Depends(verify_api_key)])
+def dismiss_deleted_stop(request: StopDismissRequest):
+    with _stop_execution_lock:
+        info = _get_pending_stop_orders().get(request.entry_order_id)
+        if not info or not request.confirmed_cancelled_unfilled:
+            raise HTTPException(status_code=400, detail="請確認已取消、未有任何成交，並已刪除券商紀錄")
+        if info.get('filled_qty') or info.get('stop_intent') or info.get('stop_loss_placed_qty'):
+            raise HTTPException(status_code=409, detail="有成交或止蝕紀錄，不能停止追蹤")
+        try:
+            result = _query_order_status_and_fill(_get_futu_host(), int(os.getenv('FUTU_PORT', '11111')),
+                request.entry_order_id, info['acc_id'], info['trd_env'], info.get('created_at', ''))
+        except Exception:
+            raise HTTPException(status_code=409, detail="券商查詢失敗，未能安全停止追蹤，請稍後再試")
+        if result is not None:
+            raise HTTPException(status_code=409, detail="券商仍有此訂單紀錄，請等自動核對結果")
+        _update_pending_stop_order(request.entry_order_id, {'status': 'CLOSED_BY_USER', 'last_error': None})
+        _remove_pending_stop_order(request.entry_order_id)
+    return {'success': True, 'message': '已按你確認停止追蹤，保留操作紀錄；冇取消或修改任何券商訂單'}
+
+
+class StopRetryRequest(BaseModel):
+    entry_order_id: str
+
+
+@app.post("/api/pending-stops/retry", dependencies=[Depends(verify_api_key)])
+def retry_pending_stop(request: StopRetryRequest):
+    # 只排入原本監控流程；按幾次都唔會繞過意圖核對或持倉檢查。
+    with _stop_execution_lock:
+        info = _get_pending_stop_orders().get(request.entry_order_id)
+        if info is None:
+            raise HTTPException(status_code=404, detail="紀錄已完成或不存在，請更新列表")
+        if info.get('schema_version') != 2 or (info.get('status') == 'FAILED_NEED_MANUAL' and info.get('stop_intent')):
+            raise HTTPException(status_code=409, detail="已有止蝕紀錄不明／已取消，需先人工核對，唔會直接重送")
+        _update_pending_stop_order(request.entry_order_id, {
+            'status': 'SUBMISSION_UNKNOWN' if info.get('stop_intent') else 'RECHECK_QUEUED',
+            'next_retry_at': 0, 'stop_loss_retry_count': 0,
+            'last_error': '已排入核對；確認成交及未有重複平倉單後自動補止蝕'})
+    return {'success': True, 'message': '已排入核對，通常 30–60 秒內更新；未成交唔會落止蝕，提交結果不明只核對唔重送'}
+
+
 @app.get("/api/pending-stops", response_model=PendingStopOrdersResponse, dependencies=[Depends(verify_api_key)])
 def get_pending_stop_orders():
     """
@@ -1688,6 +1834,9 @@ def get_pending_stop_orders():
     return PendingStopOrdersResponse(
         success=True,
         pending_orders=pending_list,
+        completed_orders=[PendingStopOrder(**r) for r in sorted(
+            [r for r in _load_order_history_from_file() if r.get('completed_at') and r.get('completed')],
+            key=lambda r: r['completed_at'], reverse=True)[:10]],
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
 

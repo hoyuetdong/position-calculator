@@ -464,10 +464,37 @@ export default function Home() {
   
   // 交易環境狀態
   const [pendingStops, setPendingStops] = useState<PendingStopOrder[]>([])
+  const [completedStops, setCompletedStops] = useState<PendingStopOrder[]>([])
+  const [retryingStop, setRetryingStop] = useState<string | null>(null)
+  const [stopActionMessage, setStopActionMessage] = useState('')
+  const stopStatusLabel = (status: string) => ({
+    WAITING_QUERY: '等候券商更新', CLOSED_BY_USER: '已確認取消，停止追蹤', pending: '等候成交', partial: '部分成交／已補止蝕', QUERY_RETRY: '查詢重試中',
+    SUBMISSION_UNKNOWN: '止蝕提交待核實', SUBMITTING_STOP: '提交止蝕中',
+    RECHECK_QUEUED: '已排入核對', RETRY: '自動補單重試中',
+    POSITION_REVIEW: '持倉／已有訂單需核對', FAILED_NEED_MANUAL: '補止蝕失敗',
+    LEGACY_NEED_MANUAL: '舊紀錄需核對', PROTECTED: '止蝕已掛出',
+    CLOSED_UNFILLED: '已取消／失效，未成交', NO_POSITION: '已無持倉',
+  } as Record<string, string>)[status] || status
+  const retryStop = async (id: string, dismiss = false) => {
+    if (dismiss && !window.confirm('確認呢張買單已取消、從未成交，並已刪除富途紀錄？停止追蹤後，app 唔會再為呢張單補止蝕。')) return
+    setRetryingStop(id)
+    try {
+      const response = await fetch(`/api/pending-stops/${dismiss ? 'dismiss' : 'retry'}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_order_id: id, confirmed_cancelled_unfilled: dismiss }),
+      })
+      const result = await response.json()
+      setStopActionMessage(result.detail || result.message || '已排入核對')
+      const refreshed = await fetchPendingStopOrders()
+      setPendingStops(refreshed.pending_orders)
+      setCompletedStops(refreshed.completed_orders || [])
+    } catch { setStopActionMessage('未能確認重試請求，請稍後更新狀態') }
+    finally { setRetryingStop(null) }
+  }
   const [stopMonitorError, setStopMonitorError] = useState('')
   const [stopMonitorExpanded, setStopMonitorExpanded] = useState(false)
   const stopMonitorNeedsAttention = Boolean(stopMonitorError) || pendingStops.some(order =>
-    Boolean(order.last_error) || !['pending', 'partial', 'SUBMITTING_STOP'].includes(order.status))
+    Boolean(order.last_error) || !['pending', 'partial', 'SUBMITTING_STOP', 'WAITING_QUERY'].includes(order.status))
   const showStopMonitorDetails = stopMonitorNeedsAttention || stopMonitorExpanded
   useEffect(() => {
     let active = true
@@ -475,7 +502,7 @@ export default function Home() {
     const refresh = async () => {
       try {
         const result = await fetchPendingStopOrders()
-        if (active) { setPendingStops(result.pending_orders); setStopMonitorError('') }
+        if (active) { setPendingStops(result.pending_orders); setCompletedStops(result.completed_orders || []); setStopMonitorError('') }
       } catch { if (active) setStopMonitorError('止蝕監控狀態暫時讀取唔到，請檢查連線。') }
       if (active) timer = setTimeout(refresh, 30000)
     }
@@ -1562,15 +1589,31 @@ export default function Home() {
                 </span>
               </button>
               {showStopMonitorDetails && <div id="stop-monitor-details" className="border-t border-border px-4 pb-3 text-xs">
+                <p className="pt-3 text-muted-foreground">每 30–60 秒核對；只為已成交股數補單。補單前會核對持倉及已有平倉單。</p>
+                {stopActionMessage && <p role="status" className="pt-2">{stopActionMessage}</p>}
                 {stopMonitorError && <p role="status" className="pt-3 text-warning">{stopMonitorError}</p>}
                 {!stopMonitorError && pendingStops.length === 0 && <p className="pt-3 text-muted-foreground">暫無待處理止蝕</p>}
                 <div className="max-h-64 overflow-y-auto">
                   {pendingStops.map(order => <div key={order.entry_order_id} className="space-y-1 pt-3 break-words">
-                    <div className="flex items-center justify-between gap-2"><span className="font-semibold">{order.symbol}</span><span className="text-muted-foreground">{order.status}</span></div>
+                    <div className="flex items-center justify-between gap-2"><span className="font-semibold">{order.symbol}</span><span className="text-muted-foreground">{stopStatusLabel(order.status)}</span></div>
                     <p className="text-muted-foreground">已成交 {order.filled_qty || 0}/{order.quantity} 股 · 已掛止蝕 {order.stop_loss_placed_qty || 0} 股</p>
                     {order.last_error && <p className="text-warning">{order.last_error}</p>}
+                    {(order.last_error || !['pending', 'partial'].includes(order.status)) && <button
+                      type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id)}
+                      className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50">
+                      {retryingStop === order.entry_order_id ? '排入核對中…' : '核對並補止蝕'}
+                    </button>}
+                    {order.status === 'QUERY_RETRY' && !order.filled_qty && !order.stop_loss_placed_qty && <button
+                      type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id, true)}
+                      className="ml-2 text-xs text-muted-foreground underline disabled:opacity-50">已取消並刪除紀錄</button>}
                   </div>)}
                 </div>
+                {completedStops.length > 0 && <details className="mt-3 border-t border-border pt-2">
+                  <summary className="cursor-pointer text-muted-foreground">最近已處理（{completedStops.length}）</summary>
+                  {completedStops.map(order => <p key={order.entry_order_id} className="pt-2">
+                    {order.symbol} · {stopStatusLabel(order.status)} · 成交 {order.filled_qty || 0}／已掛止蝕 {order.stop_loss_placed_qty || 0} 股
+                  </p>)}
+                </details>}
               </div>}
             </section>
 

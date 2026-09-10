@@ -32,12 +32,14 @@ class Stops(unittest.TestCase):
         m._PENDING_STOPS_FILE = Path(self.temp.name) / 'pending_stops.json'
         m._ORDER_HISTORY_FILE = Path(self.temp.name) / 'order_history.json'
         m._pending_stop_orders = {}
+        m._order_snapshots = {}
         self.info = dict(symbol='AAPL', quantity=10, stop_loss_price=90, acc_id=42, trd_env='REAL', direction='LONG')
         m._add_pending_stop_order('entry', self.info.copy())
         self.query = patch.object(m, '_query_order_status_and_fill').start()
         self.query.return_value = dict(status='FILLED_ALL', fill_qty=10, order_qty=10, acc_id=42)
         self.place = patch.object(m, '_place_stop_order', return_value=dict(success=True, stop_order_id='stop-1')).start()
         self.reconcile = patch.object(m, '_reconcile_stop', return_value=None).start()
+        self.capacity = patch.object(m, '_stop_capacity', return_value='available').start()
 
     def tearDown(self):
         patch.stopall()
@@ -175,7 +177,113 @@ class Stops(unittest.TestCase):
         with patch.dict(sys.modules, {'futu': fake}):
             result = m._query_order_status_and_fill('localhost', 1, 'entry', 42, 'REAL', '2026-09-01')
         self.assertEqual(result['fill_qty'], 10)
-        self.assertEqual(Context.closed, 1)
+        self.assertEqual(Context.closed, 2)
+
+    def test_cancelled_unfilled_archived_and_not_restored(self):
+        self.query.return_value = dict(status='CANCELLED_ALL', fill_qty=0)
+        self.tick()
+        self.place.assert_not_called()
+        self.assertFalse(m._pending_stop_orders)
+        self.assertEqual(m.get_pending_stop_orders().completed_orders[0].status, 'CLOSED_UNFILLED')
+        m._restore_pending_stops_from_history('localhost', 1, 'REAL')
+        self.assertFalse(m._pending_stop_orders)
+
+    def test_expired_partial_protects_filled_only(self):
+        self.query.return_value = dict(status='DISABLED', fill_qty=2)
+        self.tick()
+        self.assertEqual(self.place.call_args.args[3], 2)
+        self.assertEqual(m.get_pending_stop_orders().completed_orders[0].status, 'PROTECTED')
+
+    def test_flat_requires_two_separated_checks(self):
+        self.capacity.return_value = 'flat'
+        self.tick()
+        self.assertIn('entry', m._pending_stop_orders)
+        m._pending_stop_orders['entry']['flat_seen_at'] -= 61
+        self.retry_now(); self.tick()
+        self.place.assert_not_called()
+        self.assertNotIn('entry', m._pending_stop_orders)
+        self.assertEqual(m.get_pending_stop_orders().completed_orders[0].status, 'NO_POSITION')
+
+    def test_position_conflict_blocks_both_auto_and_manual(self):
+        self.capacity.side_effect = RuntimeError('已有平倉單')
+        self.tick()
+        m.retry_pending_stop(m.StopRetryRequest(entry_order_id='entry'))
+        self.tick()
+        self.place.assert_not_called()
+        self.assertEqual(m._pending_stop_orders['entry']['status'], 'POSITION_REVIEW')
+
+    def test_double_manual_retry_sends_only_one_stop(self):
+        for _ in range(2): m.retry_pending_stop(m.StopRetryRequest(entry_order_id='entry'))
+        self.tick()
+        m._monitor_one('localhost', 11111, 'entry', self.info)
+        self.assertEqual(self.place.call_count, 1)
+
+    def test_manual_unknown_only_reconciles_never_resends(self):
+        self.place.side_effect = TimeoutError('timeout')
+        self.tick()
+        m.retry_pending_stop(m.StopRetryRequest(entry_order_id='entry'))
+        self.tick()
+        self.assertEqual(self.place.call_count, 1)
+
+    def test_dismiss_requires_explicit_unfilled_confirmation(self):
+        self.query.return_value = None
+        with self.assertRaises(m.HTTPException):
+            m.dismiss_deleted_stop(m.StopDismissRequest(entry_order_id='entry'))
+        m.dismiss_deleted_stop(m.StopDismissRequest(entry_order_id='entry', confirmed_cancelled_unfilled=True))
+        self.place.assert_not_called()
+        self.assertFalse(m._pending_stop_orders)
+        self.assertEqual(m.get_pending_stop_orders().completed_orders[0].status, 'CLOSED_BY_USER')
+
+    def test_dismiss_refuses_broker_failure_or_known_order(self):
+        for result in [dict(status='SUBMITTED', fill_qty=0), dict(status='FILLED_ALL', fill_qty=10)]:
+            self.query.return_value = result
+            with self.assertRaises(m.HTTPException):
+                m.dismiss_deleted_stop(m.StopDismissRequest(entry_order_id='entry', confirmed_cancelled_unfilled=True))
+        self.query.side_effect = RuntimeError('rate limit')
+        with self.assertRaises(m.HTTPException):
+            m.dismiss_deleted_stop(m.StopDismissRequest(entry_order_id='entry', confirmed_cancelled_unfilled=True))
+        self.assertIn('entry', m._pending_stop_orders)
+
+    def test_batch_queries_do_not_grow_with_order_count(self):
+        patch.stopall()
+        class Context:
+            calls = 0
+            def __init__(self, **kwargs): pass
+            def order_list_query(self, **kwargs):
+                Context.calls += 1
+                return 0, Rows([dict(order_id=str(i), order_status='SUBMITTED', dealt_qty=0, qty=10) for i in range(50)])
+            def close(self): pass
+        with patch.dict(sys.modules, {'futu': types.SimpleNamespace(RET_OK=0, OpenSecTradeContext=Context)}):
+            for i in range(50):
+                self.assertEqual(m._query_order_status_and_fill('localhost', 1, str(i), 42, 'REAL')['fill_qty'], 0)
+        self.assertEqual(Context.calls, 1)
+
+    def test_query_failures_cached_and_not_treated_as_cancel(self):
+        patch.stopall()
+        class Context:
+            calls = 0
+            def __init__(self, **kwargs): pass
+            def order_list_query(self, **kwargs):
+                Context.calls += 1
+                return -1, 'rate limit'
+            history_order_list_query = order_list_query
+            def close(self): pass
+        with patch.dict(sys.modules, {'futu': types.SimpleNamespace(RET_OK=0, OpenSecTradeContext=Context)}):
+            for i in range(12):
+                with self.assertRaises(RuntimeError): m._query_order_status_and_fill('localhost', 1, str(i), 42, 'REAL')
+        self.assertEqual(Context.calls, 2)
+
+    def test_actual_capacity_checks_existing_exit_orders(self):
+        patch.stopall()
+        class Context:
+            def __init__(self, **kwargs): pass
+            def position_list_query(self, **kwargs):
+                return 0, Rows([dict(code='US.AAPL', qty=10, position_side='LONG')])
+            def close(self): pass
+        existing = {'s': dict(code='US.AAPL', trd_side='SELL', order_status='SUBMITTED', qty=7, dealt_qty=0)}
+        with patch.dict(sys.modules, {'futu': types.SimpleNamespace(RET_OK=0, OpenSecTradeContext=Context)}), patch.object(m, '_broker_order_snapshot', return_value=(existing, None)):
+            self.assertEqual(m._stop_capacity('localhost', 1, self.info, 3), 'available')
+            with self.assertRaises(RuntimeError): m._stop_capacity('localhost', 1, self.info, 4)
 
     def test_entry_limit_sessions_and_types(self):
         patch.stopall()

@@ -72,6 +72,7 @@ export interface PendingStopOrder {
 
 export interface PendingStopOrdersResponse {
   success: boolean
+  completed_orders?: PendingStopOrder[]
   pending_orders: PendingStopOrder[]
   timestamp: string
 }
