@@ -501,7 +501,7 @@ export default function Home() {
     finally { setRetryingStop(null) }
   }
   const [stopMonitorError, setStopMonitorError] = useState('')
-  const [stopMonitorExpanded, setStopMonitorExpanded] = useState(false)
+  const [stopMonitorExpanded, setStopMonitorExpanded] = useState(true)
   const stopMonitorNeedsAttention = Boolean(stopMonitorError) || pendingStops.some(order =>
     Boolean(order.last_error) || !['pending', 'partial', 'SUBMITTING_STOP', 'WAITING_QUERY'].includes(order.status))
   const showStopMonitorDetails = stopMonitorNeedsAttention || stopMonitorExpanded
@@ -1271,40 +1271,6 @@ export default function Home() {
             <div className="bg-card border border-border rounded-xl p-6 space-y-4">
               <h3 className="text-lg font-semibold mb-4">倉位設定</h3>
               
-              {/* LONG/SHORT Toggle */}
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDirection('LONG')
-
-                  }}
-                  className={`flex flex-1 items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
-                    direction === 'LONG'
-                      ? 'bg-profit text-black shadow-lg'
-                      : 'bg-secondary text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <TrendingUp className="w-4 h-4 shrink-0" />
-                  Long (做多)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDirection('SHORT')
-
-                  }}
-                  className={`flex flex-1 items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
-                    direction === 'SHORT'
-                      ? 'bg-loss text-white shadow-lg'
-                      : 'bg-secondary text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <TrendingDown className="w-4 h-4 shrink-0" />
-                  Short (做空)
-                </button>
-              </div>
-              
               {/* 第一行：股票代號 | 買入價 & 止蝕價 */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* 左邊：股票代號 */}
@@ -1405,6 +1371,40 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* LONG/SHORT Toggle */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDirection('LONG')
+
+                  }}
+                  className={`flex flex-1 items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                    direction === 'LONG'
+                      ? 'bg-profit text-black shadow-lg'
+                      : 'bg-secondary text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <TrendingUp className="w-4 h-4 shrink-0" />
+                  Long (做多)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDirection('SHORT')
+
+                  }}
+                  className={`flex flex-1 items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                    direction === 'SHORT'
+                      ? 'bg-loss text-white shadow-lg'
+                      : 'bg-secondary text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <TrendingDown className="w-4 h-4 shrink-0" />
+                  Short (做空)
+                </button>
               </div>
 
               {/* 訂單期限 */}
@@ -1593,14 +1593,14 @@ export default function Home() {
                 className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left">
                 <span className="text-sm font-semibold">止蝕監控</span>
                 <span className={`text-xs ${stopMonitorNeedsAttention ? 'text-warning' : 'text-muted-foreground'}`}>
-                  {stopMonitorNeedsAttention ? '需要留意' : pendingStops.length ? `${pendingStops.length} 張追蹤中` : '暫無待處理止蝕'}
+                  {stopMonitorNeedsAttention ? '需要留意' : pendingStops.length ? `${pendingStops.length} 張追蹤中` : '目前沒有待處理的止蝕單'}
                   <span className="ml-2" aria-hidden="true">{showStopMonitorDetails ? '▴' : '▾'}</span>
                 </span>
               </button>
               {showStopMonitorDetails && <div id="stop-monitor-details" className="border-t border-border px-4 pb-3 text-xs">
                 {stopActionMessage && <p role="status" className="pt-2">{stopActionMessage}</p>}
                 {stopMonitorError && <p role="status" className="pt-3 text-warning">{stopMonitorError}</p>}
-                {!stopMonitorError && pendingStops.length === 0 && <p className="pt-3 text-muted-foreground">暫無待處理止蝕</p>}
+                {!stopMonitorError && pendingStops.length === 0 && <p className="pt-3 text-muted-foreground">目前沒有待處理的止蝕單</p>}
                 <div className="max-h-64 overflow-y-auto">
                   {pendingStops.map(order => <div key={order.entry_order_id} className="space-y-1 pt-3 break-words">
                     <div className="flex items-start justify-between gap-2"><span className="font-semibold">{order.symbol}</span><span className={`text-right ${stopStatusClass(order.status)}`}>{stopStatusLabel(order.status)}</span></div>
