@@ -15,7 +15,7 @@ def coverage(code, direction, positions, orders):
     short = direction == 'SHORT'
     held = sum(abs(float(p.get('qty', 0))) for p in positions if str(p.get('code')) == code
         and (str(p.get('position_side')) == 'SHORT' or float(p.get('qty', 0)) < 0) == short)
-    sides = {'BUY', 'BUY_BACK'} if short else {'SELL', 'SELL_SHORT'}
+    sides = {'BUY', 'BUY_BACK'} if short else {'SELL'}
     relevant = [o for o in orders if str(o.get('code')) == code and str(o.get('trd_side')) in sides
         and str(o.get('order_type')) in STOPS and str(o.get('order_status')) in ACTIVE]
     confirmed = [o for o in relevant if str(o.get('order_status')) in {'SUBMITTED', 'FILLED_PART'}]

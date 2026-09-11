@@ -143,5 +143,8 @@ class Protection(unittest.TestCase):
         self.assertEqual(check['status'], 'WAITING_STOP')
         self.assertEqual(check['waiting_qty'], 10)
         self.assertEqual(check['protected_qty'], 0)
-        self.assertIn('待提交 10 股', state['notifications'][0]['message'])
-        self.assertNotIn('42:REAL', state['notifications'][0]['id'])
+        self.assertEqual(state['notifications'], [])
+
+    def test_sell_short_is_not_counted_as_long_position_protection(self):
+        self.stop['trd_side'] = 'SELL_SHORT'
+        self.assertEqual(coverage('US.AAPL', 'LONG', self.positions, [self.stop])['protected_qty'], 0)

@@ -4,7 +4,7 @@ import { fetchWithTimeout } from '@/lib/fetchWithTimeout'
 
 const labels: Record<string, string> = {
   OK: '運作正常', DISCONNECTED: '連線中斷', COOLDOWN: 'API 冷卻中', DEGRADED: '核對未完成', STALE: '資料未更新', STARTING: '正在核對',
-  WAITING_STOP: '止蝕待提交', COVERED: '股數相符', UNDER_PROTECTED: '止蝕不足', EXCESS_STOP: '止蝕股數過多', NO_POSITION: '已無持倉',
+  WAITING_STOP: '止蝕單待提交', COVERED: '已設定止蝕單', UNDER_PROTECTED: '止蝕單股數少於持倉', EXCESS_STOP: '止蝕單股數多於持倉', NO_POSITION: '已無持倉',
   SUBMITTED: '已提交', pending: '待成交', partial: '部分成交／已補止蝕', PROTECTED: '止蝕已掛出',
   QUERY_RETRY: '查詢重試', RETRY: '補單重試', SUBMISSION_UNKNOWN: '提交待確認', SUBMITTING_STOP: '正在提交止蝕',
   FAILED_NEED_MANUAL: '需要人工處理', LEGACY_NEED_MANUAL: '舊紀錄待核對', POSITION_REVIEW: '持倉待核對',
@@ -89,8 +89,8 @@ export default function ProtectionPanel() {
       <div className="mt-2 max-h-48 overflow-auto divide-y divide-border">
         {(data?.checks || []).filter(c => c.held_qty || c.protected_qty || c.waiting_qty).map((c, i) => <div key={i} className="py-2">
           <div className="flex justify-between gap-2"><span>{c.symbol} · {c.direction === 'SHORT' ? '做空' : '做多'}</span>
-            <span className={c.status === 'COVERED' && status === 'OK' ? 'text-emerald-400' : 'text-amber-400'}>{status === 'OK' ? '' : '上次：'}{label(c.status)}</span></div>
-          <p className="mt-1 text-muted-foreground">持倉 {c.held_qty}／已確認止蝕 {c.protected_qty} 股{c.waiting_qty ? `／待提交 ${c.waiting_qty} 股` : ''} · {date(c.checked_at)}</p>
+            <span className={status === 'OK' && ['COVERED', 'WAITING_STOP'].includes(c.status) ? 'text-sky-400' : 'text-amber-400'}>{status === 'OK' ? '' : '上次：'}{label(c.status)}</span></div>
+          <p className="mt-1 text-muted-foreground">持倉 {c.held_qty} 股 · 已設定止蝕單：{c.protected_qty + (c.waiting_qty || 0)} 股{c.waiting_qty ? `（${c.waiting_qty} 股待提交）` : ''}</p>
         </div>)}
         {!data?.checks.some(c => c.held_qty || c.protected_qty || c.waiting_qty) && <p className="py-2 text-muted-foreground">目前沒有需顯示的持倉紀錄</p>}
       </div>
@@ -99,7 +99,7 @@ export default function ProtectionPanel() {
       <summary className="cursor-pointer">通知紀錄（{data?.notifications.length || 0}）</summary>
       <div className="mt-2 max-h-48 overflow-auto space-y-2">
         {data?.notifications.map(n => <div key={n.id}>
-          <p className={n.kind === 'recovered' ? 'text-emerald-400' : 'text-amber-400'}>{n.message}</p>
+          <p className={n.kind === 'recovered' ? 'text-emerald-400' : n.kind === 'info' ? 'text-sky-400' : 'text-amber-400'}>{n.message}</p>
           <time className="text-[11px] text-muted-foreground">{date(n.timestamp)}</time>
         </div>)}
         {!data?.notifications.length && <p className="text-muted-foreground">目前沒有通知</p>}
