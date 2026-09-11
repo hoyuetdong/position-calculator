@@ -2121,6 +2121,8 @@ def get_pending_stop_orders():
         for order_id, info in pending.items()
     ]
     
+    pending_list.sort(key=lambda order: order.created_at, reverse=True)
+
     return PendingStopOrdersResponse(
         success=True,
         pending_orders=pending_list,
