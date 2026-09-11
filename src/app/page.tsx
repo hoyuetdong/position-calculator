@@ -468,12 +468,12 @@ export default function Home() {
   const [retryingStop, setRetryingStop] = useState<string | null>(null)
   const [stopActionMessage, setStopActionMessage] = useState('')
   const stopStatusLabel = (status: string) => ({
-    WAITING_QUERY: '等候券商更新', CLOSED_BY_USER: '已確認取消，停止追蹤', pending: '等候成交', partial: '部分成交／已補止蝕', QUERY_RETRY: '查詢重試中',
+    WAITING_QUERY: '等候券商更新', CLOSED_BY_USER: '已確認取消', pending: '等候成交', partial: '部分成交／已補止蝕', QUERY_RETRY: '查詢重試中',
     SUBMISSION_UNKNOWN: '止蝕提交待核實', SUBMITTING_STOP: '提交止蝕中',
     RECHECK_QUEUED: '已排入核對', RETRY: '自動補單重試中',
     POSITION_REVIEW: '持倉／已有訂單需核對', FAILED_NEED_MANUAL: '補止蝕失敗',
     LEGACY_NEED_MANUAL: '舊紀錄需核對', PROTECTED: '止蝕已掛出',
-    CLOSED_UNFILLED: '已取消／失效，未成交', NO_POSITION: '已無持倉',
+    CLOSED_UNFILLED: '已取消／失效', NO_POSITION: '已無持倉',
   } as Record<string, string>)[status] || status
   const stopStatusClass = (status: string) => {
     if (status === 'PROTECTED') return 'text-emerald-400'
@@ -500,6 +500,40 @@ export default function Home() {
     } catch { setStopActionMessage('未能確認重試請求，請稍後更新狀態') }
     finally { setRetryingStop(null) }
   }
+  const renderStopRow = (order: PendingStopOrder, completed = false) => (
+    <div key={order.entry_order_id} className="py-3">
+      <div className="flex items-start justify-between gap-3">
+        <span className="font-semibold text-sm leading-5">{order.symbol}</span>
+        <span className={`max-w-[65%] rounded bg-secondary px-2 py-0.5 text-right text-[11px] leading-4 ${stopStatusClass(order.status)}`}>
+          {stopStatusLabel(order.status)}
+        </span>
+      </div>
+      <dl className="mt-2 grid grid-cols-3 gap-2">
+        <div>
+          <dt className="text-[11px] text-muted-foreground">原定止蝕</dt>
+          <dd className="mt-0.5 select-all font-mono text-sm font-semibold tabular-nums">{originalStopPrice(order.stop_loss_price)}</dd>
+        </div>
+        <div className="text-right">
+          <dt className="text-[11px] text-muted-foreground">已成交／委託</dt>
+          <dd className="mt-0.5 tabular-nums">{order.filled_qty || 0}<span className="text-muted-foreground"> / {order.quantity} 股</span></dd>
+        </div>
+        <div className="text-right">
+          <dt className="text-[11px] text-muted-foreground">已掛止蝕</dt>
+          <dd className="mt-0.5 tabular-nums">{order.stop_loss_placed_qty || 0} 股</dd>
+        </div>
+      </dl>
+      {!completed && order.last_error && <p className="mt-2 break-words border-l-2 border-warning/50 pl-2 text-[11px] leading-relaxed text-warning">{order.last_error}</p>}
+      {!completed && (order.last_error || !['pending', 'partial'].includes(order.status)) && <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id)}
+          className="rounded-md border border-border px-2.5 py-1.5 text-[11px] hover:bg-secondary disabled:opacity-50">
+          {retryingStop === order.entry_order_id ? '排入核對中…' : '核對並補止蝕'}
+        </button>
+        {order.status === 'QUERY_RETRY' && !order.filled_qty && !order.stop_loss_placed_qty && <button
+          type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id, true)}
+          className="rounded-md px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-secondary disabled:opacity-50">已取消並刪除紀錄</button>}
+      </div>}
+    </div>
+  )
   const [stopMonitorError, setStopMonitorError] = useState('')
   const [stopMonitorExpanded, setStopMonitorExpanded] = useState(true)
   const stopMonitorNeedsAttention = Boolean(stopMonitorError) || pendingStops.some(order =>
@@ -1373,8 +1407,10 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* LONG/SHORT Toggle */}
-              <div className="flex gap-2">
+              {/* 交易方向 */}
+              <div role="group" aria-labelledby="trade-direction-label">
+                <p id="trade-direction-label" className="text-sm text-muted-foreground">交易方向</p>
+                <div className="mt-1 flex gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -1405,6 +1441,7 @@ export default function Home() {
                   <TrendingDown className="w-4 h-4 shrink-0" />
                   Short (做空)
                 </button>
+                </div>
               </div>
 
               {/* 訂單期限 */}
@@ -1593,7 +1630,7 @@ export default function Home() {
                 className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left">
                 <span className="text-sm font-semibold">止蝕監控</span>
                 <span className={`text-xs ${stopMonitorNeedsAttention ? 'text-warning' : 'text-muted-foreground'}`}>
-                  {stopMonitorNeedsAttention ? '需要留意' : pendingStops.length ? `${pendingStops.length} 張追蹤中` : '目前沒有待處理的止蝕單'}
+                  {stopMonitorNeedsAttention ? '需要留意' : pendingStops.length ? `${pendingStops.length} 張追蹤中` : '0 張追蹤中'}
                   <span className="ml-2" aria-hidden="true">{showStopMonitorDetails ? '▴' : '▾'}</span>
                 </span>
               </button>
@@ -1601,34 +1638,14 @@ export default function Home() {
                 {stopActionMessage && <p role="status" className="pt-2">{stopActionMessage}</p>}
                 {stopMonitorError && <p role="status" className="pt-3 text-warning">{stopMonitorError}</p>}
                 {!stopMonitorError && pendingStops.length === 0 && <p className="pt-3 text-muted-foreground">目前沒有待處理的止蝕單</p>}
-                <div className="max-h-64 overflow-y-auto">
-                  {pendingStops.map(order => <div key={order.entry_order_id} className="space-y-1 pt-3 break-words">
-                    <div className="flex items-start justify-between gap-2"><span className="font-semibold">{order.symbol}</span><span className={`text-right ${stopStatusClass(order.status)}`}>{stopStatusLabel(order.status)}</span></div>
-                    <p>原定止蝕 <span className="select-all font-semibold tabular-nums">{originalStopPrice(order.stop_loss_price)}</span></p>
-                    <p className="text-muted-foreground">已成交 {order.filled_qty || 0}/{order.quantity} 股 · 已掛止蝕 {order.stop_loss_placed_qty || 0} 股</p>
-                    {order.last_error && <p className="text-warning">{order.last_error}</p>}
-                    {(order.last_error || !['pending', 'partial'].includes(order.status)) && <button
-                      type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id)}
-                      className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50">
-                      {retryingStop === order.entry_order_id ? '排入核對中…' : '核對並補止蝕'}
-                    </button>}
-                    {order.status === 'QUERY_RETRY' && !order.filled_qty && !order.stop_loss_placed_qty && <button
-                      type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id, true)}
-                      className="ml-2 text-xs text-muted-foreground underline disabled:opacity-50">已取消並刪除紀錄</button>}
-                  </div>)}
+                <div className="max-h-72 overflow-y-auto pr-1 divide-y divide-border">
+                  {pendingStops.map(order => renderStopRow(order))}
                 </div>
-                {completedStops.length > 0 && <details className="mt-3 border-t border-border pt-2">
-                  <summary className="cursor-pointer text-muted-foreground">最近已處理（{completedStops.length}）</summary>
-                  {completedStops.map(order => <div key={order.entry_order_id} className="space-y-1 pt-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="font-semibold">{order.symbol}</span>
-                      <span className={`text-right ${stopStatusClass(order.status)}`}>{stopStatusLabel(order.status)}</span>
-                    </div>
-                    <p className="flex flex-wrap gap-x-3 gap-y-1">
-                      <span>原定止蝕 <span className="select-all font-semibold tabular-nums">{originalStopPrice(order.stop_loss_price)}</span></span>
-                      <span className="text-muted-foreground">成交 {order.filled_qty || 0}／已掛止蝕 {order.stop_loss_placed_qty || 0} 股</span>
-                    </p>
-                  </div>)}
+                {completedStops.length > 0 && <details className="mt-1 border-t border-border pt-3">
+                  <summary className="cursor-pointer text-muted-foreground">最近已處理 <span className="ml-1 tabular-nums">{completedStops.length}</span></summary>
+                  <div className="mt-1 max-h-64 overflow-y-auto pr-1 divide-y divide-border">
+                    {completedStops.map(order => renderStopRow(order, true))}
+                  </div>
                 </details>}
               </div>}
             </section>
