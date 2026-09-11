@@ -475,6 +475,15 @@ export default function Home() {
     LEGACY_NEED_MANUAL: '舊紀錄需核對', PROTECTED: '止蝕已掛出',
     CLOSED_UNFILLED: '已取消／失效，未成交', NO_POSITION: '已無持倉',
   } as Record<string, string>)[status] || status
+  const stopStatusClass = (status: string) => {
+    if (status === 'PROTECTED') return 'text-emerald-400'
+    if (['CLOSED_BY_USER', 'CLOSED_UNFILLED', 'NO_POSITION'].includes(status)) return 'text-slate-400'
+    if (['FAILED_NEED_MANUAL', 'LEGACY_NEED_MANUAL', 'POSITION_REVIEW'].includes(status)) return 'text-red-400'
+    if (['pending', 'partial', 'WAITING_QUERY', 'SUBMITTING_STOP', 'RECHECK_QUEUED'].includes(status)) return 'text-sky-400'
+    return 'text-amber-400'
+  }
+  const originalStopPrice = (price: number) => Number.isFinite(price) && price > 0
+    ? `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : '—'
   const retryStop = async (id: string, dismiss = false) => {
     if (dismiss && !window.confirm('確認呢張買單已取消、從未成交，並已刪除富途紀錄？停止追蹤後，app 唔會再為呢張單補止蝕。')) return
     setRetryingStop(id)
@@ -1589,13 +1598,13 @@ export default function Home() {
                 </span>
               </button>
               {showStopMonitorDetails && <div id="stop-monitor-details" className="border-t border-border px-4 pb-3 text-xs">
-                <p className="pt-3 text-muted-foreground">每 30–60 秒核對；只為已成交股數補單。補單前會核對持倉及已有平倉單。</p>
                 {stopActionMessage && <p role="status" className="pt-2">{stopActionMessage}</p>}
                 {stopMonitorError && <p role="status" className="pt-3 text-warning">{stopMonitorError}</p>}
                 {!stopMonitorError && pendingStops.length === 0 && <p className="pt-3 text-muted-foreground">暫無待處理止蝕</p>}
                 <div className="max-h-64 overflow-y-auto">
                   {pendingStops.map(order => <div key={order.entry_order_id} className="space-y-1 pt-3 break-words">
-                    <div className="flex items-center justify-between gap-2"><span className="font-semibold">{order.symbol}</span><span className="text-muted-foreground">{stopStatusLabel(order.status)}</span></div>
+                    <div className="flex items-start justify-between gap-2"><span className="font-semibold">{order.symbol}</span><span className={`text-right ${stopStatusClass(order.status)}`}>{stopStatusLabel(order.status)}</span></div>
+                    <p>原定止蝕 <span className="select-all font-semibold tabular-nums">{originalStopPrice(order.stop_loss_price)}</span></p>
                     <p className="text-muted-foreground">已成交 {order.filled_qty || 0}/{order.quantity} 股 · 已掛止蝕 {order.stop_loss_placed_qty || 0} 股</p>
                     {order.last_error && <p className="text-warning">{order.last_error}</p>}
                     {(order.last_error || !['pending', 'partial'].includes(order.status)) && <button
@@ -1610,9 +1619,16 @@ export default function Home() {
                 </div>
                 {completedStops.length > 0 && <details className="mt-3 border-t border-border pt-2">
                   <summary className="cursor-pointer text-muted-foreground">最近已處理（{completedStops.length}）</summary>
-                  {completedStops.map(order => <p key={order.entry_order_id} className="pt-2">
-                    {order.symbol} · {stopStatusLabel(order.status)} · 成交 {order.filled_qty || 0}／已掛止蝕 {order.stop_loss_placed_qty || 0} 股
-                  </p>)}
+                  {completedStops.map(order => <div key={order.entry_order_id} className="space-y-1 pt-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-semibold">{order.symbol}</span>
+                      <span className={`text-right ${stopStatusClass(order.status)}`}>{stopStatusLabel(order.status)}</span>
+                    </div>
+                    <p className="flex flex-wrap gap-x-3 gap-y-1">
+                      <span>原定止蝕 <span className="select-all font-semibold tabular-nums">{originalStopPrice(order.stop_loss_price)}</span></span>
+                      <span className="text-muted-foreground">成交 {order.filled_qty || 0}／已掛止蝕 {order.stop_loss_placed_qty || 0} 股</span>
+                    </p>
+                  </div>)}
                 </details>}
               </div>}
             </section>
