@@ -1038,8 +1038,8 @@ def _audit_protection(host, port):
                     result = coverage(code, direction, positions, orders.values())
                     result['symbol'] = code.split('.', 1)[-1]
                     checked[key] = result
-                    abnormal = result['status'] in {'UNDER_PROTECTED', 'EXCESS_STOP'}
-                    message = (f"{result['symbol']}：持倉 {result['held_qty']:g} 股，有效止蝕 {result['protected_qty']:g} 股，請核對。"
+                    abnormal = result['status'] in {'UNDER_PROTECTED', 'EXCESS_STOP', 'WAITING_STOP'}
+                    message = (f"{result['symbol']}：持倉 {result['held_qty']:g} 股，已確認止蝕 {result['protected_qty']:g} 股，待提交 {result['waiting_qty']:g} 股。"
                         if abnormal else f"{result['symbol']}：止蝕股數核對已恢復正常。")
                     transition(state, 'coverage:' + key, abnormal, message, result['symbol'])
                 missing_ids = {str(sid) for r in items for sid in r.get('stop_order_ids', []) if str(sid) not in orders}

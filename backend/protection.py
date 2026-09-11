@@ -1,5 +1,6 @@
 """唯讀止蝕覆蓋核對及通知去重，不提交或修改券商訂單。"""
 from datetime import datetime, timezone
+from hashlib import sha256
 
 ACTIVE = {'SUBMITTED', 'FILLED_PART', 'WAITING_SUBMIT', 'SUBMITTING'}
 STOPS = {'STOP', 'STOP_LIMIT', 'TRAILING_STOP', 'TRAILING_STOP_LIMIT'}
@@ -19,8 +20,13 @@ def coverage(code, direction, positions, orders):
         and str(o.get('order_type')) in STOPS and str(o.get('order_status')) in ACTIVE]
     confirmed = [o for o in relevant if str(o.get('order_status')) in {'SUBMITTED', 'FILLED_PART'}]
     protected = sum(max(0, float(o.get('qty', 0)) - float(o.get('dealt_qty', 0))) for o in confirmed)
+    waiting = sum(max(0, float(o.get('qty', 0)) - float(o.get('dealt_qty', 0))) for o in relevant if str(o.get('order_status')) in {'WAITING_SUBMIT', 'SUBMITTING'})
     if held == 0:
-        status = 'EXCESS_STOP' if protected else 'NO_POSITION'
+        status = 'EXCESS_STOP' if protected + waiting else 'NO_POSITION'
+    elif protected + waiting > held:
+        status = 'EXCESS_STOP'
+    elif protected < held and protected + waiting >= held:
+        status = 'WAITING_STOP'
     elif protected < held:
         status = 'UNDER_PROTECTED'
     elif protected > held:
@@ -28,7 +34,7 @@ def coverage(code, direction, positions, orders):
     else:
         status = 'COVERED'
     return {'code': code, 'direction': direction, 'held_qty': held, 'protected_qty': protected,
-        'status': status, 'checked_at': now_iso()}
+        'waiting_qty': waiting, 'status': status, 'checked_at': now_iso()}
 
 
 def transition(state, key, active, message, symbol=''):
@@ -42,7 +48,7 @@ def transition(state, key, active, message, symbol=''):
     timestamp = now_iso()
     conditions[key] = {'active': active, 'message': message, 'symbol': symbol, 'updated_at': timestamp}
     notices = state.setdefault('notifications', [])
-    notices.append({'id': f'{key}:{timestamp}', 'symbol': symbol, 'message': message,
+    notices.append({'id': sha256(f'{key}:{timestamp}'.encode()).hexdigest()[:24], 'symbol': symbol, 'message': message,
         'kind': 'warning' if active else 'recovered', 'timestamp': timestamp})
     state['notifications'] = notices[-200:]
 

@@ -82,7 +82,7 @@ class Protection(unittest.TestCase):
         self.stop['trd_side'] = 'BUY_BACK'
         self.assertEqual(coverage('US.AAPL', 'SHORT', positions, [self.stop])['status'], 'COVERED')
         self.stop['order_status'] = 'SUBMITTING'
-        self.assertEqual(coverage('US.AAPL', 'SHORT', positions, [self.stop])['status'], 'UNDER_PROTECTED')
+        self.assertEqual(coverage('US.AAPL', 'SHORT', positions, [self.stop])['status'], 'WAITING_STOP')
 
     def test_unknown_link_recorded_and_not_mistaken_for_active_stop(self):
         self.orders = {}
@@ -135,3 +135,13 @@ class Protection(unittest.TestCase):
         pending['uncertain']['status'] = 'pending'
         with patch.object(m, '_get_pending_stop_orders', return_value=pending):
             self.assertEqual(self.audit()['notifications'][-1]['kind'], 'recovered')
+
+    def test_waiting_stop_is_visible_and_not_reported_missing(self):
+        self.stop['order_status'] = 'WAITING_SUBMIT'
+        state = self.audit()
+        check = next(iter(state['checks'].values()))
+        self.assertEqual(check['status'], 'WAITING_STOP')
+        self.assertEqual(check['waiting_qty'], 10)
+        self.assertEqual(check['protected_qty'], 0)
+        self.assertIn('待提交 10 股', state['notifications'][0]['message'])
+        self.assertNotIn('42:REAL', state['notifications'][0]['id'])
