@@ -21,6 +21,7 @@ import {
 } from '@/lib/yahooAPI'
 import { fetchPositions, fetchAccountBalance, placeOrder, fetchEnv, setEnv, fetchPendingStopOrders, type PendingStopOrder, type BrokerPosition } from '@/lib/positionsAPI'
 import CandlestickChart from '@/components/CandlestickChart'
+import ProtectionPanel from '@/components/ProtectionPanel'
 import DataSourceControl from '@/components/DataSourceControl'
 
 interface Position {
@@ -485,7 +486,7 @@ export default function Home() {
   const originalStopPrice = (price: number) => Number.isFinite(price) && price > 0
     ? `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : '—'
   const retryStop = async (id: string, dismiss = false) => {
-    if (dismiss && !window.confirm('確認呢張買單已取消、從未成交，並已刪除富途紀錄？停止追蹤後，app 唔會再為呢張單補止蝕。')) return
+    if (dismiss && !window.confirm('確認此買單已取消、從未成交，並已刪除富途紀錄？停止追蹤後，應用程式將不再為此訂單補掛止蝕。')) return
     setRetryingStop(id)
     try {
       const response = await fetch(`/api/pending-stops/${dismiss ? 'dismiss' : 'retry'}`, {
@@ -546,7 +547,7 @@ export default function Home() {
       try {
         const result = await fetchPendingStopOrders()
         if (active) { setPendingStops(result.pending_orders); setCompletedStops(result.completed_orders || []); setStopMonitorError('') }
-      } catch { if (active) setStopMonitorError('止蝕監控狀態暫時讀取唔到，請檢查連線。') }
+      } catch { if (active) setStopMonitorError('暫時無法讀取止蝕監控狀態，請檢查連線。') }
       if (active) timer = setTimeout(refresh, 30000)
     }
     refresh()
@@ -968,7 +969,7 @@ export default function Home() {
     } catch (error) {
       setOrderResult({
         success: false,
-        message: error instanceof Error ? error.message : '落單失敗',
+        message: error instanceof Error ? error.message : '下單失敗',
       })
     }
     
@@ -1537,7 +1538,7 @@ export default function Home() {
           <div className="space-y-6 flex flex-col h-full">
             {/* Main Result */}
             <div className="bg-card border border-border rounded-xl p-6 text-center">
-              <p className="text-muted-foreground mb-2">{direction === 'LONG' ? '應買股數' : '應借入股數'}</p>
+              <p className="text-muted-foreground mb-2">{direction === 'LONG' ? '應買股數' : '應賣空股數'}</p>
               <p className="text-6xl font-bold text-primary glow-green">{shares.toLocaleString()}</p>
               <p className="text-muted-foreground mt-4">總持倉價值</p>
               <p className="text-2xl font-mono">${positionValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
@@ -1563,7 +1564,7 @@ export default function Home() {
                   ) : (
                     <TrendingDown className="w-4 h-4" />
                   )}
-                  {tradeEnv === 'REAL' ? '一鍵落單 (真金白銀)' : '一鍵落單 (模擬)'}
+                  {tradeEnv === 'REAL' ? '一鍵下單 (真金白銀)' : '一鍵下單 (模擬)'}
                 </button>
                 <button
                   type="button"
@@ -1650,6 +1651,8 @@ export default function Home() {
               </div>}
             </section>
 
+            <ProtectionPanel />
+
             {/* History */}
             {positions.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-6">
@@ -1709,7 +1712,7 @@ export default function Home() {
               </div>
               <h3 className="text-xl font-bold text-red-500 mb-2">⚠️ 警告：你即將切換至真實交易環境</h3>
               <p className="text-muted-foreground mb-4">
-                切換後，所有落單將會扣除真實資金！<br/>
+                切換後，所有下單將會扣除真實資金！<br/>
                 請確保你已經了解風險，先繼續操作。
               </p>
               <div className="flex gap-3">
@@ -1748,7 +1751,7 @@ export default function Home() {
                     <div className="w-16 h-16 bg-profit/20 rounded-full flex items-center justify-center mx-auto mb-4">
                       <TrendingUp className="w-8 h-8 text-profit" />
                     </div>
-                    <h3 className="text-xl font-bold text-profit mb-2">落單成功！</h3>
+                    <h3 className="text-xl font-bold text-profit mb-2">下單成功！</h3>
                     <p className="text-muted-foreground mb-2">{orderResult.message}</p>
                     {orderResult.orderId && (
                       <p className="text-sm text-muted-foreground">Order ID: {orderResult.orderId}</p>
@@ -1759,7 +1762,7 @@ export default function Home() {
                     <div className="w-16 h-16 bg-loss/20 rounded-full flex items-center justify-center mx-auto mb-4">
                       <AlertTriangle className="w-8 h-8 text-loss" />
                     </div>
-                    <h3 className="text-xl font-bold text-loss mb-2">落單失敗</h3>
+                    <h3 className="text-xl font-bold text-loss mb-2">下單失敗</h3>
                     <p className="text-muted-foreground">{orderResult.message}</p>
                   </>
                 )}
@@ -1786,7 +1789,7 @@ export default function Home() {
                   ) : (
                     <>
                       <TrendingDown className="w-6 h-6 text-loss" />
-                      <span>確認借入 (Short)</span>
+                      <span>確認賣空 (Short)</span>
                     </>
                   )}
                 </h3>
@@ -1853,7 +1856,7 @@ export default function Home() {
                       <AlertTriangle className="w-4 h-4" />
                       {direction === 'LONG' 
                         ? `當買入單成交後，將自動觸發止蝕單 (SELL ${shares} @ $${parseFloat(stopLoss).toFixed(2)})`
-                        : `當借入單成交後，將自動觸發止蝕單 (BUY ${shares} @ $${parseFloat(stopLoss).toFixed(2)})`
+                        : `當賣空單成交後，將自動觸發止蝕單 (BUY ${shares} @ $${parseFloat(stopLoss).toFixed(2)})`
                       }
                     </p>
                   </div>
@@ -1863,7 +1866,7 @@ export default function Home() {
                   <div className="bg-red-500/20 border border-red-500 rounded-lg p-3 mb-6">
                     <p className="text-sm text-red-400 flex items-center gap-2">
                       <AlertTriangle className="w-4 h-4" />
-                      警告：真實交易環境 (REAL) - 落單將扣除真實資金！
+                      警告：真實交易環境 (REAL) - 下單將扣除真實資金！
                     </p>
                   </div>
                 ) : (
@@ -1893,12 +1896,12 @@ export default function Home() {
                     {ordering ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        落單緊...
+                        正在下單...
                       </>
                     ) : (
                       <>
                         <TrendingUp className="w-4 h-4" />
-                        確認落單
+                        確認下單
                       </>
                     )}
                   </button>

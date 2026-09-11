@@ -58,3 +58,5 @@ backend/*.lock
 logs/
 *.bak
 *.backup-*
+
+backend/protection_state.json

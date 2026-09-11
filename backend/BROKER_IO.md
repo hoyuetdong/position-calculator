@@ -10,3 +10,11 @@
 - `GET /api/health`（需 API key）包括 `broker_io` 嘅 server_requests、cache_hits、deferred、rate_limits、cooling_interfaces，以及 push_contexts、push_received、last_push_at。計數自服務啟動開始，唔代表其他程式用量；有推送連線唔等於券商永不斷線。
 
 測試：`venv/bin/python3 -m unittest discover -s backend/tests`。測試使用假券商，唔落真實單。正式環境驗證只做 API 健康及唯讀狀態核對；成交後補單仍由用戶原有交易流程觸發。
+
+## 持續止蝕核對與應用程式內通知
+
+每 60 秒按原訂單的帳戶、環境及市場共用一次訂單與持倉查詢，沿用 BrokerIO 的快取、限頻及冷卻。這是唯讀核對，不會重新建立被使用者取消的止蝕。頁面每 30 秒讀取已儲存結果，不直接呼叫券商。核對范围為應用程式訂單紀錄涉及的股票與方向；同一帳戶的現有止蝕會一併計算。
+
+已確認止蝕股數只計 SUBMITTED／FILLED_PART 的 STOP、STOP_LIMIT 及移動止蝕尚未成交股數。股數相符不代表全時段觸發或保證成交，原有券商單種限制仍然適用。持倉不足／超額、連線中斷及核對失敗各自以異常與恢復狀態去重；提交不明持續五分鐘才提醒。查詢失敗保留上次數據及異常，不能當作恢复。資料超過 150 秒未核對會顯示未更新。
+
+`protection_state.json` 持久保存通知狀態（最多 200 筆，介面顯示最新 50 筆），不進 Git。`order_history.json` 保存每筆訂單的原定價格與狀態變更時間線，只在變更時追加；舊紀錄不補造過往事件。新核對事件亦記錄券商入場單、止蝕單的狀態、股數及觸發價。搜尋介面每頁 25 筆，不把帳戶識別或設定回傳至前端。

@@ -23,6 +23,20 @@ import copy
 import math
 import tempfile
 from broker_io import BrokerIO, Deferred, PushInbox
+from protection import coverage, transition, timeline_event, now_iso
+from opencc import OpenCC
+from fastapi.responses import JSONResponse
+
+_converter = OpenCC("s2t")
+
+def traditional(value):
+    if isinstance(value, str):
+        return _converter.convert(value)
+    if isinstance(value, list):
+        return [traditional(item) for item in value]
+    if isinstance(value, dict):
+        return {key: traditional(item) for key, item in value.items()}
+    return value
 from io import StringIO
 from dotenv import load_dotenv
 
@@ -532,8 +546,15 @@ def _save_pending_stops_to_file() -> None:
 def _sync_history(entry_order_id, info):
     with _pending_stop_lock:
         history = _load_order_history_from_file()
+        previous = next((r for r in history if str(r.get('entry_order_id')) == str(entry_order_id)), {})
+        record = {**previous, **copy.deepcopy(info), 'entry_order_id': entry_order_id}
+        events = list(previous.get('events', []))
+        event = timeline_event(previous, record)
+        if event:
+            events.append(event)
+        record['events'] = events
         history = [r for r in history if str(r.get("entry_order_id")) != str(entry_order_id)]
-        history.append({"entry_order_id": entry_order_id, **copy.deepcopy(info)})
+        history.append(record)
         _atomic_json(_ORDER_HISTORY_FILE, history)
 
 
@@ -975,9 +996,123 @@ def _monitor_one_locked(host, port, entry_order_id, info):
         _update_pending_stop_order(entry_order_id, {"status": "partial" if filled else "pending", "filled_qty": filled, "last_error": None})
 
 
+_audit_lock = threading.RLock()
+
+
+def _load_protection():
+    path = _ORDER_HISTORY_FILE.with_name('protection_state.json')
+    if path.exists():
+        return json.loads(path.read_text())
+    return {'checks': {}, 'notifications': [], 'conditions': {}, 'last_success_at': None}
+
+
+def _audit_protection(host, port):
+    import futu
+    with _audit_lock:
+        state = _load_protection()
+        records = _load_order_history_from_file()
+        grouped = {}
+        for record in records:
+            if record.get('acc_id') and record.get('trd_env') and record.get('symbol'):
+                code = _to_futu_code(record['symbol'])
+                market = 'HK' if code.startswith('HK.') else 'US'
+                grouped.setdefault((record['acc_id'], record['trd_env'], market), []).append(record)
+        failures = []
+        checked = state.setdefault('checks', {})
+        for (account, env, market), items in grouped.items():
+            try:
+                orders, error = _broker_order_snapshot(host, port, market, account, env)
+                if error:
+                    raise RuntimeError(error)
+                ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market, priority=True)
+                try:
+                    ret, data = ctx.position_list_query(acc_id=account, trd_env=env, refresh_cache=True)
+                    if ret != futu.RET_OK:
+                        raise RuntimeError(str(data))
+                    positions = [dict(row) for _, row in data.iterrows()]
+                finally:
+                    ctx.close()
+                symbols = {(_to_futu_code(r['symbol']), r.get('direction', 'LONG')) for r in items}
+                for code, direction in symbols:
+                    key = f'{account}:{env}:{code}:{direction}'
+                    result = coverage(code, direction, positions, orders.values())
+                    result['symbol'] = code.split('.', 1)[-1]
+                    checked[key] = result
+                    abnormal = result['status'] in {'UNDER_PROTECTED', 'EXCESS_STOP'}
+                    message = (f"{result['symbol']}：持倉 {result['held_qty']:g} 股，有效止蝕 {result['protected_qty']:g} 股，請核對。"
+                        if abnormal else f"{result['symbol']}：止蝕股數核對已恢復正常。")
+                    transition(state, 'coverage:' + key, abnormal, message, result['symbol'])
+                missing_ids = {str(sid) for r in items for sid in r.get('stop_order_ids', []) if str(sid) not in orders}
+                missing_ids.update(str(r['entry_order_id']) for r in items if not r.get('completed') and str(r['entry_order_id']) not in orders)
+                historical, history_error = ({}, None)
+                if missing_ids:
+                    historical, history_error = _broker_order_snapshot(host, port, market, account, env, True)
+                if history_error:
+                    failures.append(history_error)
+                for record in items:
+                    entry_id = str(record['entry_order_id'])
+                    entry_row = orders.get(entry_id, historical.get(entry_id))
+                    if entry_row is not None:
+                        entry_check = {'status': str(entry_row.get('order_status')), 'filled_qty': float(entry_row.get('dealt_qty', 0))}
+                        if state.setdefault('entry_checks', {}).get(entry_id) != entry_check:
+                            with _pending_stop_lock:
+                                latest = _load_order_history_from_file()
+                                for entry in latest:
+                                    if str(entry.get('entry_order_id')) == entry_id:
+                                        entry.setdefault('events', []).append({'timestamp': now_iso(), 'kind': 'ENTRY_CHECK', 'changes': entry_check})
+                                        break
+                                _atomic_json(_ORDER_HISTORY_FILE, latest)
+                            state['entry_checks'][entry_id] = entry_check
+                    linked = {str(sid): orders.get(str(sid), historical.get(str(sid))) for sid in record.get('stop_order_ids', [])}
+                    statuses = {sid: str(row.get('order_status')) if row else 'UNKNOWN' for sid, row in linked.items()}
+                    prices = {sid: str(row.get('aux_price', '')) for sid, row in linked.items() if row}
+                    key = record['entry_order_id']
+                    old = state.setdefault('linked_stops', {}).get(key)
+                    current = {'statuses': statuses, 'prices': prices,
+                        'quantities': {sid: float(row.get('qty', 0)) for sid, row in linked.items() if row},
+                        'filled': {sid: float(row.get('dealt_qty', 0)) for sid, row in linked.items() if row}}
+                    if linked and old != current and not (history_error and any(row is None for row in linked.values())):
+                        with _pending_stop_lock:
+                            latest = _load_order_history_from_file()
+                            for entry in latest:
+                                if entry.get('entry_order_id') == key:
+                                    entry.setdefault('events', []).append({'timestamp': now_iso(), 'kind': 'STOP_CHECK', 'changes': current})
+                                    break
+                            _atomic_json(_ORDER_HISTORY_FILE, latest)
+                        state['linked_stops'][key] = current
+            except Exception as exc:
+                failures.append(str(exc))
+        # 只讀目前記憶體狀態；結果不明持續五分鐘才提醒。
+        for key, info in _get_pending_stop_orders().items():
+            condition = 'submission:' + key
+            active = info.get('status') == 'SUBMISSION_UNKNOWN'
+            first = state.setdefault('unknown_since', {}).get(key)
+            if active:
+                if first is None:
+                    state['unknown_since'][key] = time.time()
+                elif time.time() - first >= 300:
+                    transition(state, condition, True, f"{info['symbol']}：止蝕提交結果超過五分鐘仍未確認。", info['symbol'])
+            elif info.get('status') not in {'QUERY_RETRY', 'FAILED_NEED_MANUAL'}:
+                state['unknown_since'].pop(key, None)
+                transition(state, condition, False, f"{info['symbol']}：止蝕提交狀態已確認。", info['symbol'])
+        for record in records:
+            if record.get('completed'):
+                transition(state, 'submission:' + record['entry_order_id'], False,
+                    f"{record.get('symbol', '')}：止蝕提交狀態已確認。", record.get('symbol', ''))
+        connected = _test_opend_connection(host, port)
+        transition(state, 'connection', not connected, 'OpenD 連線中斷。' if not connected else 'OpenD 連線已恢復。')
+        transition(state, 'verification', bool(failures), '止蝕核對暫時失敗，請留意資料時間。' if failures else '止蝕核對已恢復。')
+        state['system_status'] = 'DISCONNECTED' if not connected else ('COOLDOWN' if _broker_io.stats()['cooling_interfaces'] else ('DEGRADED' if failures else 'OK'))
+        state['last_attempt_at'] = now_iso()
+        if not failures and connected:
+            state['last_success_at'] = now_iso()
+        _atomic_json(_ORDER_HISTORY_FILE.with_name('protection_state.json'), state)
+
+
 def _monitor_loop(host: str, port: int, check_interval: float = 10.0):
     global _monitor_last_tick
     last_restore = 0.0
+    last_audit = 0.0
     while _monitor_running.is_set():
         _monitor_last_tick = time.time()
         if _push_inbox.event.is_set():
@@ -1009,6 +1144,13 @@ def _monitor_loop(host: str, port: int, check_interval: float = 10.0):
                     _update_pending_stop_order(key, {"last_error": str(exc), "next_retry_at": time.time() + 60})
                 except Exception:
                     logging.exception("止蝕紀錄寫入失敗")
+        if time.time() - last_audit >= 60:
+            try:
+                with _stop_execution_lock:
+                    _audit_protection(host, port)
+            except Exception:
+                logging.exception('持續止蝕核對失敗')
+            last_audit = time.time()
         _push_inbox.event.wait(check_interval)
 
 
@@ -1352,6 +1494,12 @@ def _place_order(
         if data is not None and not data.empty:
             order_id = str(data.iloc[0].get("order_id", ""))
 
+        if order_id:
+            _sync_history(order_id, {'symbol': symbol, 'quantity': quantity, 'entry_price': price,
+                'stop_loss_price': stop_loss_price, 'order_type': order_type, 'time_in_force': time_in_force,
+                'direction': 'SHORT' if side.upper() == 'SELL' else 'LONG', 'acc_id': acc_id, 'trd_env': trd_env,
+                'created_at': now_iso(), 'status': 'SUBMITTED', 'filled_qty': 0, 'stop_loss_placed_qty': 0})
+
         # If stop_loss_price is provided,
         # add to pending list for background monitor to trigger after FILLED
         if stop_loss_price and order_id:
@@ -1367,6 +1515,9 @@ def _place_order(
                     "symbol": symbol,
                     "quantity": quantity,
                     "stop_loss_price": stop_loss_price,
+                    "entry_price": price,
+                    "order_type": order_type,
+                    "time_in_force": time_in_force,
                     "futu_code": futu_code,
                     "acc_id": acc_id,
                     "trd_env": trd_env,
@@ -1532,6 +1683,31 @@ class BalanceResponse(BaseModel):
 
 # FastAPI app
 app = FastAPI(title="Futu Broker API", version="1.0.0")
+
+
+@app.exception_handler(HTTPException)
+async def traditional_http_error(request, exc):
+    return JSONResponse(status_code=exc.status_code, content={'detail': traditional(exc.detail)}, headers=exc.headers)
+
+
+@app.get('/api/protection', dependencies=[Depends(verify_api_key)])
+def protection_status():
+    state = _load_protection()
+    recent = state.get('last_attempt_at')
+    stale = not recent or (datetime.now(timezone.utc) - datetime.fromisoformat(recent)).total_seconds() > 150
+    return traditional({'system_status': 'STALE' if stale else state.get('system_status', 'STARTING'),
+        'last_success_at': state.get('last_success_at'), 'checks': list(state.get('checks', {}).values()),
+        'notifications': list(reversed(state.get('notifications', [])))[:50],
+        'active_alerts': [v for v in state.get('conditions', {}).values() if v.get('active')]})
+
+
+@app.get('/api/order-history', dependencies=[Depends(verify_api_key)])
+def order_history(symbol: str = '', offset: int = 0):
+    records = [r for r in _load_order_history_from_file() if symbol.upper() in r.get('symbol', '').upper()]
+    records.sort(key=lambda r: r.get('created_at', ''), reverse=True)
+    allowed = {'entry_order_id', 'symbol', 'entry_price', 'stop_loss_price', 'quantity', 'filled_qty',
+        'stop_loss_placed_qty', 'status', 'created_at', 'events', 'direction'}
+    return traditional({'total': len(records), 'orders': [{k:v for k,v in r.items() if k in allowed} for r in records[max(0,offset):max(0,offset)+25]]})
 
 
 @app.get("/api/health", dependencies=[Depends(verify_api_key)])
@@ -1938,7 +2114,7 @@ def get_pending_stop_orders():
             stop_loss_price=info["stop_loss_price"],
             status=info.get("status", "pending" if info.get("filled_qty", 0) == 0 else "partial"),
             created_at=info.get("created_at", ""),
-            last_error=info.get("last_error"),
+            last_error=traditional(info.get("last_error")),
             stop_loss_placed_qty=info.get("stop_loss_placed_qty", 0)
         )
         for order_id, info in pending.items()
