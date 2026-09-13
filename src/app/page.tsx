@@ -505,7 +505,7 @@ export default function Home() {
     <div key={order.entry_order_id} className="py-3">
       <div className="flex items-start justify-between gap-3">
         <span className="font-semibold text-sm leading-5">{order.symbol}</span>
-        <span className={`max-w-[65%] rounded bg-secondary px-2 py-0.5 text-right text-[11px] leading-4 ${stopStatusClass(order.status)}`}>
+        <span className={`max-w-[65%] rounded bg-[#363636] px-2 py-0.5 text-right text-[11px] leading-4 ${stopStatusClass(order.status)}`}>
           {stopStatusLabel(order.status)}
         </span>
       </div>
