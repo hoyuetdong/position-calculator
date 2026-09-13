@@ -265,7 +265,8 @@ def _broker_order_snapshot(host, port, market, acc_id, trd_env, history=False):
     key = (host, port, market, acc_id, trd_env, history)
     now = time.monotonic()
     cached = _order_snapshots.get(key)
-    if cached and now - cached[0] < (300 if history else 5):
+    # 失敗結果只短暫合併；不能沿用歷史資料的五分鐘快取。
+    if cached and now - cached[0] < (5 if cached[2] else (300 if history else 5)):
         return cached[1], cached[2]
     rows, error = {}, None
     ctx = None
@@ -1018,12 +1019,15 @@ def _audit_protection(host, port):
                 market = 'HK' if code.startswith('HK.') else 'US'
                 grouped.setdefault((record['acc_id'], record['trd_env'], market), []).append(record)
         failures = []
+        history_failures = []
         checked = state.setdefault('checks', {})
         for (account, env, market), items in grouped.items():
+            stage = '目前訂單查詢'
             try:
                 orders, error = _broker_order_snapshot(host, port, market, account, env)
                 if error:
                     raise RuntimeError(error)
+                stage = '持倉查詢'
                 ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market, priority=True)
                 try:
                     ret, data = ctx.position_list_query(acc_id=account, trd_env=env, refresh_cache=True)
@@ -1032,6 +1036,7 @@ def _audit_protection(host, port):
                     positions = [dict(row) for _, row in data.iterrows()]
                 finally:
                     ctx.close()
+                stage = '持倉與止蝕核對'
                 symbols = {(_to_futu_code(r['symbol']), r.get('direction', 'LONG')) for r in items}
                 for code, direction in symbols:
                     key = f'{account}:{env}:{code}:{direction}'
@@ -1049,7 +1054,8 @@ def _audit_protection(host, port):
                 if missing_ids:
                     historical, history_error = _broker_order_snapshot(host, port, market, account, env, True)
                 if history_error:
-                    failures.append(history_error)
+                    history_failures.append(f'歷史訂單查詢：{history_error}')
+                stage = '訂單紀錄更新'
                 for record in items:
                     entry_id = str(record['entry_order_id'])
                     entry_row = orders.get(entry_id, historical.get(entry_id))
@@ -1082,7 +1088,7 @@ def _audit_protection(host, port):
                             _atomic_json(_ORDER_HISTORY_FILE, latest)
                         state['linked_stops'][key] = current
             except Exception as exc:
-                failures.append(str(exc))
+                failures.append(f'{stage}：{exc}')
         # 只讀目前記憶體狀態；結果不明持續五分鐘才提醒。
         for key, info in _get_pending_stop_orders().items():
             condition = 'submission:' + key
@@ -1102,7 +1108,16 @@ def _audit_protection(host, port):
                     f"{record.get('symbol', '')}：止蝕提交狀態已確認。", record.get('symbol', ''))
         connected = _test_opend_connection(host, port)
         transition(state, 'connection', not connected, 'OpenD 連線中斷。' if not connected else 'OpenD 連線已恢復。')
-        transition(state, 'verification', bool(failures), '止蝕核對暫時失敗，請留意資料時間。' if failures else '止蝕核對已恢復。')
+        # 保留每次失敗的階段與原因，避免只有籠統通知而無從追查。
+        details = list(dict.fromkeys(traditional(str(reason))[:300] for reason in failures + history_failures))
+        if details:
+            state.setdefault('failure_events', []).append({'timestamp': now_iso(), 'reasons': details})
+            state['failure_events'] = state['failure_events'][-100:]
+        state['last_errors'] = details
+        transition(state, 'verification', bool(failures),
+            f'目前持倉與止蝕核對未完成。{traditional(failures[0])[:200]}' if failures else '目前持倉與止蝕核對已恢復。')
+        transition(state, 'history_verification', bool(history_failures),
+            f'歷史訂單紀錄暫未更新。{traditional(history_failures[0])[:200]}' if history_failures else '歷史訂單紀錄更新已恢復。')
         state['system_status'] = 'DISCONNECTED' if not connected else ('COOLDOWN' if _broker_io.stats()['cooling_interfaces'] else ('DEGRADED' if failures else 'OK'))
         state['last_attempt_at'] = now_iso()
         if not failures and connected:

@@ -8,6 +8,8 @@ from unittest.mock import patch
 from test_stops import m, Rows
 from protection import coverage, transition, timeline_event
 
+REAL_SNAPSHOT = m._broker_order_snapshot
+
 
 class Protection(unittest.TestCase):
     def setUp(self):
@@ -148,3 +150,37 @@ class Protection(unittest.TestCase):
     def test_sell_short_is_not_counted_as_long_position_protection(self):
         self.stop['trd_side'] = 'SELL_SHORT'
         self.assertEqual(coverage('US.AAPL', 'LONG', self.positions, [self.stop])['protected_qty'], 0)
+
+    def test_history_failure_does_not_mark_current_coverage_failed(self):
+        self.orders = {}
+        with patch.object(m, '_broker_order_snapshot', side_effect=lambda *args: ({}, 'timeout') if len(args) > 5 else ({}, None)):
+            state = self.audit()
+        self.assertEqual(state['system_status'], 'OK')
+        self.assertIsNotNone(state['last_success_at'])
+        self.assertTrue(state['conditions']['history_verification']['active'])
+        self.assertIn('歷史訂單查詢：timeout', state['failure_events'][-1]['reasons'])
+        self.assertEqual(next(iter(state['checks'].values()))['status'], 'UNDER_PROTECTED')
+        self.assertTrue(state['conditions']['coverage:42:REAL:US.AAPL:LONG']['active'])
+
+    def test_current_failure_records_reason_without_false_recovery(self):
+        self.error = 'connection timeout'
+        state = self.audit()
+        self.assertEqual(state['system_status'], 'DEGRADED')
+        self.assertIn('目前訂單查詢：connection timeout', state['last_errors'])
+        self.assertIn('connection timeout', state['notifications'][0]['message'])
+        self.assertIsNone(state['last_success_at'])
+
+    def test_failed_history_snapshot_expires_before_success_cache(self):
+        # 使用真正快取路徑，模擬第一次逾時及下一輪成功。
+        saved = m._order_snapshots
+        m._order_snapshots = {}
+        try:
+            self.context.history_order_list_query = lambda **kw: (-1, 'timeout')
+            with patch.object(m, '_broker_order_snapshot', wraps=REAL_SNAPSHOT) as query:
+                with patch.object(m.time, 'monotonic', return_value=100):
+                    self.assertEqual(query('fake', 0, 'US', 42, 'REAL', True)[1], 'timeout')
+                self.context.history_order_list_query = lambda **kw: (0, Rows([]))
+                with patch.object(m.time, 'monotonic', return_value=161):
+                    self.assertIsNone(query('fake', 0, 'US', 42, 'REAL', True)[1])
+        finally:
+            m._order_snapshots = saved
