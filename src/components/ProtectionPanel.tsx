@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react'
 import { fetchWithTimeout } from '@/lib/fetchWithTimeout'
 
 const labels: Record<string, string> = {
+  RECOVERY_PREPARE:'準備收回本金', RECOVERY_RESIZING:'調整止蝕股數', RECOVERY_READY:'準備賣出', RECOVERY_SUBMITTING:'賣單待確認', RECOVERY_OPEN:'收回本金賣單已提交', RECOVERY_SETTLE:'核對剩餘持倉', RECOVERY_RESTORING:'核對剩餘止蝕', RECOVERY_FEE_PENDING:'等待費用回報', RECOVERY_DONE:'收回本金流程完成',
   OK: '運作正常', DISCONNECTED: '連線中斷', COOLDOWN: 'API 冷卻中', DEGRADED: '核對未完成', STALE: '資料未更新', STARTING: '正在核對',
-  WAITING_STOP: '止蝕單待提交', COVERED: '已設定止蝕單', UNDER_PROTECTED: '止蝕單股數少於持倉', EXCESS_STOP: '止蝕單股數多於持倉', NO_POSITION: '已無持倉',
+  RECOVERING_PRINCIPAL: '收回本金處理中', WAITING_STOP: '止蝕單待提交', COVERED: '已設定止蝕單', UNDER_PROTECTED: '止蝕單股數少於持倉', EXCESS_STOP: '止蝕單股數多於持倉', NO_POSITION: '已無持倉',
   SUBMITTED: '已提交', pending: '待成交', partial: '部分成交／已補止蝕', PROTECTED: '止蝕已掛出',
   QUERY_RETRY: '查詢重試', RETRY: '補單重試', SUBMISSION_UNKNOWN: '提交待確認', SUBMITTING_STOP: '正在提交止蝕',
   FAILED_NEED_MANUAL: '需要人工處理', LEGACY_NEED_MANUAL: '舊紀錄待核對', POSITION_REVIEW: '持倉待核對',
@@ -25,6 +26,7 @@ type Snapshot = {
 }
 function eventText(event: Event) {
   const c = event.changes
+  if (event.kind === 'RECOVERY') return c.message || '收回本金紀錄已更新'
   if (event.kind === 'ENTRY_CHECK') return `入場單：${label(c.status)} · 累計成交 ${c.filled_qty} 股`
   if (event.kind === 'STOP_CHECK') return Object.entries(c.statuses || {}).map(([id, status]) =>
     `止蝕單 …${id.slice(-6)}：${label(String(status))}${c.quantities?.[id] !== undefined ? `，成交 ${c.filled?.[id] || 0}／${c.quantities[id]} 股` : ''}${c.prices?.[id] && c.prices[id] !== 'N/A' ? `，觸發價 $${c.prices[id]}` : ''}`).join('；')

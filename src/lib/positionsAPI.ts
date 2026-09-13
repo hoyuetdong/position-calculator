@@ -4,6 +4,8 @@ import { fetchWithTimeout } from './fetchWithTimeout'
  */
 
 export interface Position {
+  account_id?: string
+  position_side?: string
   symbol: string
   name: string
   quantity: number

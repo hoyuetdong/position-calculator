@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location('broker_main', ROOT / 'main.py')
 m = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = m
 spec.loader.exec_module(m)
 spec2 = importlib.util.spec_from_file_location('maintenance', ROOT / 'maintenance.py')
 maintenance = importlib.util.module_from_spec(spec2)

@@ -60,3 +60,5 @@ logs/
 *.backup-*
 
 backend/protection_state.json
+
+backend/zero_cost_jobs.json

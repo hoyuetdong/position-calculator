@@ -21,6 +21,7 @@ import {
 } from '@/lib/yahooAPI'
 import { fetchPositions, fetchAccountBalance, placeOrder, fetchEnv, setEnv, fetchPendingStopOrders, type PendingStopOrder, type BrokerPosition } from '@/lib/positionsAPI'
 import CandlestickChart from '@/components/CandlestickChart'
+import ZeroCostRecovery from '@/components/ZeroCostRecovery'
 import ProtectionPanel from '@/components/ProtectionPanel'
 import DataSourceControl from '@/components/DataSourceControl'
 
@@ -187,6 +188,7 @@ function ZeroCostCalculator({
   setShares: (value: string) => void
   accountSize: number
 }) {
+  const [recoveryPosition, setRecoveryPosition] = useState<BrokerPosition | null>(null)
   // Filter for US stocks only (not HK stocks)
   const usPositions = brokerPositions.filter(pos => !pos.symbol.endsWith('.HK'))
 
@@ -328,6 +330,7 @@ function ZeroCostCalculator({
               富途美股持倉
             </h3>
           </div>
+          <ZeroCostRecovery selected={recoveryPosition} onClose={() => setRecoveryPosition(null)} onSync={onSync} />
           
           {usPositions.length > 0 ? (
             <div className="flex-1 overflow-y-auto pr-2 space-y-3">
@@ -351,7 +354,7 @@ function ZeroCostCalculator({
                   return (
                     <div 
                       key={idx} 
-                      className="flex items-center justify-between px-4 py-3 mb-2 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
+                      className="flex flex-wrap gap-2 items-center justify-between px-4 py-3 mb-2 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
                       onClick={() => {
                         // 点击填充到左边计算器
                         if (hasPL && plPercent > 0 && onSelectPosition) {
@@ -365,6 +368,7 @@ function ZeroCostCalculator({
                         <span className="text-sm text-gray-500">{pos.quantity} 股</span>
                       </div>
                       
+                      {!achieved && pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryPosition(pos)}} className="rounded bg-[#363636] px-3 py-1.5 text-xs text-primary whitespace-nowrap mx-2">收回本金</button>}
                       {/* 右侧：零成本信息 + 盈亏 */}
                       {achieved && <div className="text-right text-xs text-profit">
                         <div className="font-bold text-sm">已達成零成本持倉</div>

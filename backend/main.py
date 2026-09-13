@@ -895,7 +895,7 @@ def _monitor_one(host, port, entry_order_id, info):
     # 手動重試同自動監控共用鎖，並重新讀取最新紀錄。
     with _stop_execution_lock:
         current = _get_pending_stop_orders().get(entry_order_id)
-        if current is not None:
+        if current is not None and not _zero_cost_busy(current.get('acc_id'), _to_futu_code(current['symbol'])):
             _monitor_one_locked(host, port, entry_order_id, current)
 
 
@@ -1041,6 +1041,8 @@ def _audit_protection(host, port):
                 for code, direction in symbols:
                     key = f'{account}:{env}:{code}:{direction}'
                     result = coverage(code, direction, positions, orders.values())
+                    if direction == 'LONG':
+                        result = _zero_cost_coverage(result, account, env, orders)
                     result['symbol'] = code.split('.', 1)[-1]
                     checked[key] = result
                     abnormal = result['status'] in {'UNDER_PROTECTED', 'EXCESS_STOP'}
@@ -1106,6 +1108,7 @@ def _audit_protection(host, port):
             if record.get('completed'):
                 transition(state, 'submission:' + record['entry_order_id'], False,
                     f"{record.get('symbol', '')}：止蝕提交狀態已確認。", record.get('symbol', ''))
+        _zero_cost_alerts(state)
         connected = _test_opend_connection(host, port)
         transition(state, 'connection', not connected, 'OpenD 連線中斷。' if not connected else 'OpenD 連線已恢復。')
         # 保留每次失敗的階段與原因，避免只有籠統通知而無從追查。
@@ -1160,6 +1163,10 @@ def _monitor_loop(host: str, port: int, check_interval: float = 10.0):
                     _update_pending_stop_order(key, {"last_error": str(exc), "next_retry_at": time.time() + 60})
                 except Exception:
                     logging.exception("止蝕紀錄寫入失敗")
+        try:
+            _monitor_zero_cost()
+        except Exception:
+            logging.exception('收回本金核對失敗')
         if time.time() - last_audit >= 60:
             try:
                 with _stop_execution_lock:
@@ -1321,6 +1328,18 @@ def _unlock_trade(ctx, trade_pwd: str) -> bool:
     return True
 
 
+def _guard_zero_cost(fn):
+    @wraps(fn)
+    def guarded(*args, **kwargs):
+        symbol = kwargs.get('symbol', args[0] if args else '')
+        with _stop_execution_lock:
+            if _zero_cost_busy(None, _to_futu_code(symbol)):
+                raise ValueError('此股票正在收回本金，請先等待或核對現有流程')
+            return fn(*args, **kwargs)
+    return guarded
+
+
+@_guard_zero_cost
 def _place_order(
     symbol: str,
     price: float,
@@ -1625,6 +1644,8 @@ def _fetch_account_balance(host: str, port: int, trade_pwd: str = "") -> Optiona
 
 # Pydantic models
 class Position(BaseModel):
+    account_id: str = ''
+    position_side: str = 'LONG'
     symbol: str
     name: str
     quantity: float
@@ -1719,7 +1740,7 @@ def protection_status():
 
 @app.get('/api/order-history', dependencies=[Depends(verify_api_key)])
 def order_history(symbol: str = '', offset: int = 0):
-    records = [r for r in _load_order_history_from_file() if symbol.upper() in r.get('symbol', '').upper()]
+    records = [r for r in _load_order_history_from_file() + _zero_cost_history() if symbol.upper() in r.get('symbol', '').upper()]
     records.sort(key=lambda r: r.get('created_at', ''), reverse=True)
     allowed = {'entry_order_id', 'symbol', 'entry_price', 'stop_loss_price', 'quantity', 'filled_qty',
         'stop_loss_placed_qty', 'status', 'created_at', 'events', 'direction'}
@@ -1841,6 +1862,8 @@ def _fetch_positions(host: str, port: int, trade_pwd: str = "") -> List[Dict]:
                         print(f"[Futu] Position found: {symbol} qty={qty}")
                         all_positions.append({
                             "symbol": symbol,
+                            "account_id": str(acc_id),
+                            "position_side": str(row.get("position_side", "LONG")),
                             "name": str(row.get("stock_name", symbol)),
                             "quantity": qty,
                             "cost_price": cost_price if bool(row.get("cost_price_valid", False)) and math.isfinite(cost_price) else None,
@@ -2538,6 +2561,10 @@ def get_stock_kline(
         print(traceback.format_exc(), flush=True)
         sys.stdout.flush()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+from zero_cost_api import install as _install_zero_cost
+_ZeroCostBroker = _install_zero_cost(sys.modules[__name__])
 
 
 if __name__ == "__main__":
