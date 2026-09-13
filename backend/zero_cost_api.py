@@ -131,10 +131,12 @@ def install(m):
             try:
                 ret, data = ctx.subscribe(code_list=[code], subtype_list=[futu.SubType.ORDER_BOOK], subscribe_push=False)
                 if ret != futu.RET_OK:
-                    raise ValueError('未能取得買一價，可自行輸入限價')
+                    raise ValueError('未能訂閱買一價：' + str(data)[:160])
                 ret, data = ctx.get_order_book(code=code, num=1)
-                if ret != futu.RET_OK or not data.get('Bid') or finite(data['Bid'][0][0]) <= 0:
-                    raise ValueError('未能取得買一價，可自行輸入限價')
+                if ret != futu.RET_OK:
+                    raise ValueError('買一價查詢失敗：' + str(data)[:160])
+                if not data.get('Bid') or finite(data['Bid'][0][0]) <= 0:
+                    raise ValueError('富途目前沒有有效買一價，請自行輸入限價，或稍後重新開啟預覽')
                 return {'bid': finite(data['Bid'][0][0]), 'bid_time': str(data.get('svr_recv_time_bid', '')), 'quote_read_at': datetime.now(timezone.utc).isoformat()}
             finally:
                 ctx.close()

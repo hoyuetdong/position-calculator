@@ -173,7 +173,8 @@ def tick(job, broker, save):
     if phase == 'FEE_PENDING':
         fee = broker.fee(job) if job.get('filled_qty', 0) else 0
         if fee is None:
-            raise ValueError('成交費用尚未回報，暫不確認已收回本金')
+            # 正常等待券商費用資料，不誤報為需要人工處理。
+            return
         fee = finite(fee)
         if fee < 0:
             raise ValueError('費用資料無效')

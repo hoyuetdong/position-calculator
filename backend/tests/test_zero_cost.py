@@ -123,7 +123,7 @@ class ZeroCost(unittest.TestCase):
         self.assertEqual(self.b.writes,[('modify',69),('sell',31)])
     def test_missing_fee_never_marks_zero_cost(self):
         self.opened();self.fill(31);self.tick();self.tick();self.b.fee_value=None
-        with self.assertRaises(ValueError): self.tick()
+        self.tick()
         self.assertEqual(self.job['phase'],'FEE_PENDING')
         self.assertNotIn('achieved',self.job)
     def test_new_external_order_blocks_submission(self):
@@ -135,6 +135,16 @@ class ZeroCost(unittest.TestCase):
         self.tick();self.tick();self.fill(31)
         for _ in range(3):self.tick()
         self.assertEqual(self.b.writes,[('sell',31)])
+
+    def test_preflight_failure_restores_stop_without_selling(self):
+        from zero_cost import NotSent
+        self.tick();self.tick()
+        self.b.sell=lambda j: (_ for _ in ()).throw(NotSent('insufficient available qty'))
+        with self.assertRaises(NotSent):self.tick()
+        self.assertEqual(self.job['phase'],'SETTLE')
+        for _ in range(4):self.tick()
+        self.assertEqual(self.b.stop['qty'],100)
+        self.assertFalse(any(x[0]=='sell' for x in self.b.writes))
 
 
 class ZeroCostAPI(unittest.TestCase):
