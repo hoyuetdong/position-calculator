@@ -967,7 +967,7 @@ def _monitor_one(host, port, entry_order_id, info):
 
 
 def _monitor_one_locked(host, port, entry_order_id, info):
-    if info.get("status") in {"FAILED_NEED_MANUAL", "LEGACY_NEED_MANUAL", "STOP_PRICE_REJECTED"}:
+    if info.get("status") in {"FAILED_NEED_MANUAL", "LEGACY_NEED_MANUAL", "STOP_PRICE_REJECTED", "STOP_REPAIR_READY"}:
         return
     if time.time() < info.get("next_retry_at", 0):
         return

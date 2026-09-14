@@ -117,6 +117,15 @@ class Stops(unittest.TestCase):
         self.assertTrue(any('stop_price_adjustment' in e['changes'] for e in record['events']))
         self.assertEqual(m.get_pending_stop_orders().completed_orders[0].stop_loss_price, 923.62)
 
+    def test_prepared_repair_requires_user_submission(self):
+        self.crossed_fill()
+        m._update_pending_stop_order('entry', {'status': 'STOP_REPAIR_READY'})
+        self.tick()
+        self.place.assert_not_called()
+        m.retry_pending_stop(m.StopRetryRequest(entry_order_id='entry'))
+        self.tick()
+        self.assertEqual(self.place.call_args.args[4], 923.62)
+
     def test_normal_fill_never_rebases_even_if_submission_price_rejected(self):
         self.crossed_fill()
         self.query.return_value['fill_price'] = 950
