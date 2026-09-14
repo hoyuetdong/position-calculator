@@ -757,8 +757,11 @@ def _query_order_status_and_fill(host: str, port: int, order_id: str, acc_id: in
 def _reconcile_stop(host, port, info, intent):
     # 查單同補單共用 snapshot；未知提交结果絕不盲目重送。
     market = "HK" if _to_futu_code(info["symbol"]).startswith("HK.") else "US"
+    errors = []
     for history in (False, True):
         rows, error = _broker_order_snapshot(host, port, market, info["acc_id"], info["trd_env"], history)
+        if error:
+            errors.append(str(error))
         for row in rows.values():
             if str(row.get("remark", "")) == intent["remark"]:
                 status = str(row.get("order_status", "")).upper()
@@ -766,6 +769,32 @@ def _reconcile_stop(host, port, info, intent):
                     return {"failed": True, "error": "券商止蝕單已取消／失效，需核對持倉後處理"}
                 if status in {"SUBMITTED", "FILLED_PART", "FILLED_ALL", "WAITING_SUBMIT", "SUBMITTING"}:
                     return {"stop_order_id": str(row["order_id"])}
+    return {'query_error': '；'.join(dict.fromkeys(errors))} if errors else None
+
+
+def _stop_price_rejection(error):
+    """Only an explicit price-validation rejection proves that no order was accepted."""
+    message = str(error).strip()
+    for source, relation in [('低于', '低於'), ('高于', '高於')]:
+        if message == f'下单失败。触发价输入需{source}市价，请修改后重新提交。':
+            return f'券商拒絕提交：止蝕觸發價須{relation}市價。原價未有提交成功；請檢查價格，或於富途處理。'
+    return None
+
+
+def _legacy_stop_rejection(entry_order_id, info):
+    """Recover only the explicit response immediately after the latest submission.
+
+    Older rejections must never clear the intent of a later ambiguous attempt.
+    """
+    for record in _load_order_history_from_file():
+        if str(record.get('entry_order_id')) != str(entry_order_id) or record.get('stop_intent') != info.get('stop_intent'):
+            continue
+        updates = [e.get('changes', {}) for e in record.get('events', []) if e.get('kind') == 'UPDATE']
+        submissions = [i for i, changes in enumerate(updates) if changes.get('status') == 'SUBMITTING_STOP']
+        if submissions and submissions[-1] + 1 < len(updates):
+            response = updates[submissions[-1] + 1]
+            if response.get('status') == 'SUBMISSION_UNKNOWN':
+                return _stop_price_rejection(response.get('last_error'))
     return None
 
 
@@ -837,6 +866,9 @@ def _place_stop_order(
         print(f"[StopMonitor] STOP order result: ret={ret}, data={data}")
         
         if ret != futu.RET_OK:
+            rejection = _stop_price_rejection(data)
+            if rejection:
+                return {'success': False, 'price_rejected': True, 'error': rejection, 'broker_error': str(data)}
             return {"success": False, "ambiguous": True, "error": str(data)}
         
         stop_order_id = None
@@ -900,7 +932,7 @@ def _monitor_one(host, port, entry_order_id, info):
 
 
 def _monitor_one_locked(host, port, entry_order_id, info):
-    if info.get("status") in {"FAILED_NEED_MANUAL", "LEGACY_NEED_MANUAL"}:
+    if info.get("status") in {"FAILED_NEED_MANUAL", "LEGACY_NEED_MANUAL", "STOP_PRICE_REJECTED"}:
         return
     if time.time() < info.get("next_retry_at", 0):
         return
@@ -910,11 +942,19 @@ def _monitor_one_locked(host, port, entry_order_id, info):
     intent = info.get("stop_intent")
     if intent:
         matched = _reconcile_stop(host, port, info, intent)
-        if matched and not matched.get("failed"):
+        if matched and matched.get('query_error'):
+            _update_pending_stop_order(entry_order_id, {
+                'status': 'SUBMISSION_UNKNOWN', 'next_retry_at': time.time() + 60,
+                'last_error': '止蝕提交仍待核實；查單失敗：' + traditional(matched['query_error'])})
+        elif matched and not matched.get("failed"):
             _update_pending_stop_order(entry_order_id, {
                 "stop_loss_placed_qty": intent["target_qty"], "stop_intent": None,
                 "stop_order_ids": info.get("stop_order_ids", []) + [matched["stop_order_id"]],
                 "status": "partial", "last_error": None})
+        elif not matched and (rejection := _legacy_stop_rejection(entry_order_id, info)):
+            _update_pending_stop_order(entry_order_id, {
+                'status': 'STOP_PRICE_REJECTED', 'stop_intent': None,
+                'last_error': rejection, 'stop_submission_error': rejection, 'next_retry_at': 0})
         else:
             _update_pending_stop_order(entry_order_id, {
                 "status": "FAILED_NEED_MANUAL" if matched else "SUBMISSION_UNKNOWN",
@@ -983,8 +1023,15 @@ def _monitor_one_locked(host, port, entry_order_id, info):
         elif result.get('deferred'):
             _update_pending_stop_order(entry_order_id, {'stop_intent': None, 'status': 'RETRY',
                 'last_error': result['error'], 'next_retry_at': time.time() + 30})
+        elif result.get('price_rejected'):
+            _update_pending_stop_order(entry_order_id, {
+                'stop_intent': None, 'status': 'STOP_PRICE_REJECTED',
+                'last_error': result['error'], 'stop_submission_error': result.get('broker_error', result['error']),
+                'next_retry_at': 0})
         elif result.get("ambiguous") or result.get("success"):
-            _update_pending_stop_order(entry_order_id, {"status": "SUBMISSION_UNKNOWN", "last_error": result.get("error", "缺少止蝕單 ID"), "next_retry_at": time.time() + 60})
+            _update_pending_stop_order(entry_order_id, {"status": "SUBMISSION_UNKNOWN",
+                "stop_submission_error": result.get("error", "缺少止蝕單 ID"),
+                "last_error": result.get("error", "缺少止蝕單 ID"), "next_retry_at": time.time() + 60})
         else:
             retries = info.get("stop_loss_retry_count", 0) + 1
             _update_pending_stop_order(entry_order_id, {"stop_intent": None, "stop_loss_retry_count": retries,
@@ -2128,12 +2175,14 @@ def retry_pending_stop(request: StopRetryRequest):
         if info is None:
             raise HTTPException(status_code=404, detail="紀錄已完成或不存在，請更新列表")
         if info.get('schema_version') != 2 or (info.get('status') == 'FAILED_NEED_MANUAL' and info.get('stop_intent')):
-            raise HTTPException(status_code=409, detail="已有止蝕紀錄不明／已取消，需先人工核對，唔會直接重送")
+            raise HTTPException(status_code=409, detail="已有止蝕紀錄不明／已取消，需要先人工核對，不會直接重送")
+        message = ('已排入提交結果核對；為避免重複，不會重送結果未明的訂單。' if info.get('stop_intent')
+            else '已排入核對；確認成交、持倉及已有平倉單後，按原定止蝕價補單。')
         _update_pending_stop_order(request.entry_order_id, {
             'status': 'SUBMISSION_UNKNOWN' if info.get('stop_intent') else 'RECHECK_QUEUED',
             'next_retry_at': 0, 'stop_loss_retry_count': 0,
-            'last_error': '已排入核對；確認成交及未有重複平倉單後自動補止蝕'})
-    return {'success': True, 'message': '已排入核對，通常 30–60 秒內更新；未成交唔會落止蝕，提交結果不明只核對唔重送'}
+            'last_error': message})
+    return {'success': True, 'message': message}
 
 
 @app.get("/api/pending-stops", response_model=PendingStopOrdersResponse, dependencies=[Depends(verify_api_key)])

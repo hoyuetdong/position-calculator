@@ -475,6 +475,7 @@ export default function Home() {
   const stopStatusLabel = (status: string) => ({
     WAITING_QUERY: '等候券商更新', CLOSED_BY_USER: '已確認取消', pending: '等候成交', partial: '部分成交／已補止蝕', QUERY_RETRY: '查詢重試中',
     SUBMISSION_UNKNOWN: '止蝕提交待核實', SUBMITTING_STOP: '提交止蝕中',
+    STOP_PRICE_REJECTED: '止蝕價格被拒絕',
     RECHECK_QUEUED: '已排入核對', RETRY: '自動補單重試中',
     POSITION_REVIEW: '持倉／已有訂單需核對', FAILED_NEED_MANUAL: '補止蝕失敗',
     LEGACY_NEED_MANUAL: '舊紀錄需核對', PROTECTED: '止蝕已掛出',
@@ -483,7 +484,7 @@ export default function Home() {
   const stopStatusClass = (status: string) => {
     if (status === 'PROTECTED') return 'text-emerald-400'
     if (['CLOSED_BY_USER', 'CLOSED_UNFILLED', 'NO_POSITION'].includes(status)) return 'text-slate-400'
-    if (['FAILED_NEED_MANUAL', 'LEGACY_NEED_MANUAL', 'POSITION_REVIEW'].includes(status)) return 'text-red-400'
+    if (['FAILED_NEED_MANUAL', 'LEGACY_NEED_MANUAL', 'POSITION_REVIEW', 'STOP_PRICE_REJECTED'].includes(status)) return 'text-red-400'
     if (['pending', 'partial', 'WAITING_QUERY', 'SUBMITTING_STOP', 'RECHECK_QUEUED'].includes(status)) return 'text-sky-400'
     return 'text-amber-400'
   }
@@ -491,6 +492,8 @@ export default function Home() {
     ? `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : '—'
   const retryStop = async (id: string, dismiss = false) => {
     if (dismiss && !window.confirm('確認此買單已取消、從未成交，並已刪除富途紀錄？停止追蹤後，應用程式將不再為此訂單補掛止蝕。')) return
+    const order = pendingStops.find(item => item.entry_order_id === id)
+    if (!dismiss && order?.status === 'STOP_PRICE_REJECTED' && !window.confirm(`以原止蝕價 ${originalStopPrice(order.stop_loss_price)} 再次核對並提交？如價格仍不符合券商要求，將再次被拒絕；程式不會自動改價。`)) return
     setRetryingStop(id)
     try {
       const response = await fetch(`/api/pending-stops/${dismiss ? 'dismiss' : 'retry'}`, {
@@ -531,7 +534,7 @@ export default function Home() {
       {!completed && (order.last_error || !['pending', 'partial'].includes(order.status)) && <div className="mt-2 flex flex-wrap items-center gap-2">
         <button type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id)}
           className="rounded-md border border-border px-2.5 py-1.5 text-[11px] hover:bg-secondary disabled:opacity-50">
-          {retryingStop === order.entry_order_id ? '排入核對中…' : '核對並補止蝕'}
+          {retryingStop === order.entry_order_id ? '排入核對中…' : order.status === 'STOP_PRICE_REJECTED' ? '按原價核對並重試' : order.status === 'SUBMISSION_UNKNOWN' ? '核對提交結果' : '核對並補止蝕'}
         </button>
         {order.status === 'QUERY_RETRY' && !order.filled_qty && !order.stop_loss_placed_qty && <button
           type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id, true)}

@@ -103,6 +103,80 @@ class Stops(unittest.TestCase):
         self.assertEqual(self.place.call_count, 1)
         self.assertEqual(m._pending_stop_orders['entry']['status'], 'SUBMISSION_UNKNOWN')
 
+    def test_explicit_price_rejection_waits_for_user_and_keeps_price(self):
+        self.place.return_value = dict(success=False, price_rejected=True, error='價格被拒絕')
+        self.tick()
+        self.tick()
+        self.assertEqual(self.place.call_count, 1)
+        record = m._pending_stop_orders['entry']
+        self.assertEqual(record['status'], 'STOP_PRICE_REJECTED')
+        self.assertIsNone(record['stop_intent'])
+        self.assertEqual(record['stop_loss_price'], 90)
+        m.retry_pending_stop(m.StopRetryRequest(entry_order_id='entry'))
+        self.place.return_value = dict(success=True, stop_order_id='retry-stop')
+        self.tick()
+        self.assertEqual(self.place.call_count, 2)
+        self.assertEqual(self.place.call_args.args[4], 90)
+        self.assertEqual(self.capacity.call_count, 2)
+
+    def legacy_rejection(self):
+        self.place.return_value = dict(success=False, ambiguous=True,
+            error='下单失败。触发价输入需低于市价，请修改后重新提交。')
+        self.tick()
+        # The old monitor overwrote the broker response on its next reconciliation.
+        m._update_pending_stop_order('entry', {'last_error': '止蝕提交結果未確認'})
+        self.retry_now()
+
+    def test_legacy_explicit_rejection_recovers_without_resubmission(self):
+        self.legacy_rejection()
+        m._init_pending_stops_from_file()
+        self.retry_now()
+        self.tick()
+        record = m._pending_stop_orders['entry']
+        self.assertEqual(record['status'], 'STOP_PRICE_REJECTED')
+        self.assertIsNone(record['stop_intent'])
+        self.assertIn('低於市價', record['last_error'])
+        self.assertEqual(self.place.call_count, 1)
+
+    def test_legacy_rejection_does_not_override_broker_matching_order(self):
+        self.legacy_rejection()
+        self.reconcile.return_value = {'stop_order_id': 'found'}
+        self.tick()
+        self.assertEqual(m._pending_stop_orders['entry']['stop_order_ids'], ['found'])
+        self.assertEqual(self.place.call_count, 1)
+
+    def test_legacy_rejection_does_not_clear_intent_when_query_fails(self):
+        self.legacy_rejection()
+        self.reconcile.return_value = {'query_error': 'NN_ProtoRet_TimeOut'}
+        self.tick()
+        record = m._pending_stop_orders['entry']
+        self.assertEqual(record['status'], 'SUBMISSION_UNKNOWN')
+        self.assertIsNotNone(record['stop_intent'])
+        self.assertIn('NN_ProtoRet_TimeOut', record['last_error'])
+
+    def test_older_rejection_cannot_clear_later_unknown_submission(self):
+        self.legacy_rejection()
+        m._update_pending_stop_order('entry', {'status': 'SUBMITTING_STOP'})
+        m._update_pending_stop_order('entry', {'status': 'SUBMISSION_UNKNOWN', 'last_error': 'timeout'})
+        self.tick()
+        self.assertEqual(m._pending_stop_orders['entry']['status'], 'SUBMISSION_UNKNOWN')
+        self.assertIsNotNone(m._pending_stop_orders['entry']['stop_intent'])
+
+    def test_manual_price_retry_still_checks_existing_closing_orders(self):
+        self.place.return_value = dict(success=False, price_rejected=True, error='價格被拒絕')
+        self.tick()
+        m.retry_pending_stop(m.StopRetryRequest(entry_order_id='entry'))
+        self.capacity.side_effect = RuntimeError('已有平倉單')
+        self.tick()
+        self.assertEqual(self.place.call_count, 1)
+        self.assertEqual(m._pending_stop_orders['entry']['status'], 'POSITION_REVIEW')
+
+    def test_price_rejection_classifier_is_narrow(self):
+        self.assertIn('低於', m._stop_price_rejection('下单失败。触发价输入需低于市价，请修改后重新提交。'))
+        self.assertIn('高於', m._stop_price_rejection('下单失败。触发价输入需高于市价，请修改后重新提交。'))
+        for error in ['timeout', 'NN_ProtoRet_TimeOut', '下单失败', '连接断开', '未知错误']:
+            self.assertIsNone(m._stop_price_rejection(error))
+
     def test_reconcile_after_crash_finds_stop_without_duplicate(self):
         self.place.side_effect = TimeoutError('timeout')
         self.tick()
