@@ -70,7 +70,8 @@ def install(m, Broker):
                         save(); continue
                     if time.time() - job.get('candidate_at', time.time()) < 55:
                         continue
-                    job.update(phase='ADJUSTING', target_held=held, promote_pending=held > 0)
+                    job.update(phase='ADJUSTING', target_held=held,
+                        promote_pending=held > 0 and job.get('last_held', held) > held)
                     if held:
                         # Missing cost must not prevent cancellation of excess shares.
                         try: job['break_even'] = cost_price(position)
@@ -86,7 +87,7 @@ def install(m, Broker):
                             job['break_even'] = cost_price(position)
                         if not adjust_stops(job, broker, orders, held, True, save):
                             continue
-                    event(job, '剩餘止蝕已撤銷' if held == 0 else '剩餘股數及保本止蝕已核對',
+                    event(job, '剩餘止蝕已撤銷' if held == 0 else ('剩餘股數及保本止蝕已核對' if job.get('promote_pending') else '剩餘止蝕股數已核對'),
                           phase='WATCHING', promote_pending=False, candidate=None, last_held=held, last_stop_filled=dealt)
                 job.pop('error', None)
             except Exception as exc:

@@ -21,12 +21,17 @@ class Broker(FakeBroker):
         row = self.orders[stop['order_id']]
         row.update(qty=qty, aux_price=stop['aux_price'], price=stop['price'])
         if not qty: row['order_status'] = 'CANCELLED_ALL'
+    def create_stop(self, job):
+        self.writes.append(('create_stop',job['be_qty']))
+        self.orders['new-be'] = dict(order_id='new-be',code=job['code'],trd_side='SELL',order_type='STOP',
+            qty=job['be_qty'],aux_price=job['break_even'],price=0,dealt_qty=0,order_status='WAITING_SUBMIT',remark=job['be_remark'])
+        return {'success':True,'stop_order_id':'new-be'}
 
 
 class PartialExit(unittest.TestCase):
     def setUp(self):
         self.b = Broker()
-        self.job = dict(code='US.AAPL', symbol='AAPL', phase='PREPARE', held_qty=100, principal=0, price=12,
+        self.job = dict(id='test-exit', code='US.AAPL', symbol='AAPL', phase='PREPARE', held_qty=100, principal=0, price=12,
             break_even=9, fraction=3, remark='partial-test', filled_qty=0, **partial_plan(self.b.orders, 'US.AAPL', 100, 3))
         self.saved = []
     def tick(self): partial_tick(self.job, self.b, lambda: self.saved.append(copy.deepcopy(self.job)))
@@ -86,6 +91,24 @@ class PartialExit(unittest.TestCase):
         self.b.orders['external'] = dict(self.b.stop, order_type='NORMAL')
         with self.assertRaises(ValueError): self.tick()
         self.assertFalse(self.b.writes)
+    def test_without_existing_stop_creates_one_after_actual_fill(self):
+        self.b.orders={}; self.job.update(partial_plan({},'US.AAPL',100,3))
+        self.until('OPEN'); self.fill(33); self.until('DONE')
+        self.assertEqual((self.b.orders['new-be']['qty'],self.b.orders['new-be']['aux_price']), (67,9))
+        self.assertEqual(sum(w[0]=='create_stop' for w in self.b.writes),1)
+    def test_new_stop_unknown_response_reconciles_without_duplicate(self):
+        self.b.orders={}; self.job.update(partial_plan({},'US.AAPL',100,3))
+        self.until('OPEN'); self.fill(33); self.tick()
+        real_create=self.b.create_stop
+        def unknown(job): real_create(job); raise TimeoutError('unknown')
+        self.b.create_stop=unknown
+        with self.assertRaises(TimeoutError): self.tick()
+        self.job=copy.deepcopy(self.saved[-1]);self.until('DONE')
+        self.assertEqual(sum(w[0]=='create_stop' for w in self.b.writes),1)
+    def test_no_stop_and_unfilled_cancel_does_not_create_stop(self):
+        self.b.orders={}; self.job.update(partial_plan({},'US.AAPL',100,3))
+        self.until('OPEN');self.fill(0,'CANCELLED_ALL');self.until('DONE')
+        self.assertFalse(any(w[0]=='create_stop' for w in self.b.writes))
 
 
 class AutoStops(unittest.TestCase):
@@ -113,10 +136,15 @@ class AutoStops(unittest.TestCase):
         self.assertEqual(self.b.writes, [('modify','sl',0,8)])
         self.sync(); self.sync(); self.assertEqual(len(self.b.writes),1)
     def test_manual_partial_exit_reduces_then_promotes(self):
+        self.held=100;self.sync();self.held=40
         self.confirmed()
         self.assertEqual((self.b.stop['qty'],self.b.stop['aux_price']), (40,8))
         for _ in range(4): self.sync()
         self.assertEqual((self.b.stop['qty'],self.b.stop['aux_price']), (40,9))
+    def test_existing_excess_without_observed_sale_only_reduces_quantity(self):
+        self.confirmed()
+        for _ in range(4): self.sync()
+        self.assertEqual((self.b.stop['qty'],self.b.stop['aux_price']), (40,8))
     def test_transient_empty_position_does_not_cancel(self):
         self.held=0; self.sync(); self.held=100
         self.mocks[-1].return_value=1060; self.sync()

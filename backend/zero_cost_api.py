@@ -70,6 +70,12 @@ def install(m):
             value = finite(getattr(self, 'last_position', {}).get('nominal_price', 0))
             if value <= 0: raise ValueError('現價資料無效，保留現有止蝕價')
             return value
+        def create_stop(self, job):
+            try:
+                return m._place_stop_order(self.host, self.port, job['symbol'], int(job['be_qty']), job['break_even'],
+                    int(job['account_id']), job['env'], m.os.getenv('FUTU_TRADE_PWD', ''), 'LONG', job['be_remark'])
+            finally:
+                self.invalidate(job)
         def lookup(self, job, order_id=None, remark=None):
             for history in (False, True):
                 rows = self.orders(job, history)
@@ -151,7 +157,7 @@ def install(m):
     def public(job):
         allowed = {'id','symbol','account_id','env','phase','price','principal','fee_buffer','quantity','held_qty','keep_qty',
                    'filled_qty','remaining_qty','gross','fee','net','remaining_principal','achieved','error','created_at','events','order_id','stop','expected_gross',
-                   'kind','fraction','break_even','stops'}
+                   'kind','fraction','break_even','stops','be_stop_id'}
         return m.traditional({k:v for k,v in job.items() if k in allowed})
 
     @m.app.get('/api/zero-cost/jobs', dependencies=[Depends(m.verify_api_key)])
@@ -199,7 +205,7 @@ def install(m):
                     result.update(**partial, break_even=break_even, fraction=body.fraction, kind='PARTIAL_EXIT')
                     if price is None: return m.traditional(result)
                     price = finite(price)
-                    if price <= max(break_even, max(s['aux_price'] for s in partial['stops'])):
+                    if price <= max([break_even] + [s['aux_price'] for s in partial['stops']]):
                         message = '分批賣出限價須高於保本價及原止蝕價'
                         if body.price is not None: raise ValueError(message)
                         result['warning'] = message; return m.traditional(result)
@@ -306,6 +312,10 @@ def install(m):
                  'filled_qty':j.get('filled_qty',0), 'created_at':j['created_at'], 'status':'RECOVERY_'+j['phase'],
                  'events':[{'timestamp':e['timestamp'],'kind':'RECOVERY','changes':{'message':e['message']}} for e in j['events']]} for j in load().values()]
     m._zero_cost_history = history
+    m._zero_cost_protection_records = lambda: [dict(entry_order_id='exit:'+j['id'], symbol=j['symbol'],
+        acc_id=int(j['account_id']), trd_env=j['env'], direction='LONG', completed=True,
+        stop_order_ids=([s['order_id'] for s in j.get('stops', [])] + ([j['be_stop_id']] if j.get('be_stop_id') else [])))
+        for j in load().values() if j.get('kind') == 'PARTIAL_EXIT' and (j.get('stops') or j.get('be_stop_id'))]
     m._zero_cost_coverage = adjust_coverage
     m._zero_cost_alerts = alerts
     m._monitor_zero_cost = monitor

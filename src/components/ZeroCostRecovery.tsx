@@ -11,7 +11,7 @@ type Job = { id: string; symbol: string; phase: string; quantity: number; price:
   kind?: string; break_even?: number;
   principal: number; gross?: number; net?: number; fee?: number; remaining_principal?: number; achieved?: boolean;
   remaining_qty?: number; error?: string; events: {timestamp: string; message: string}[] }
-const phaseLabels: Record<string, string> = { PREPARE:'準備核對', RESIZING:'確認止蝕調整', READY:'準備賣出', SUBMITTING:'確認賣單結果', OPEN:'賣單已提交', SETTLE:'核對剩餘止蝕', RESTORING:'確認剩餘止蝕', FEE_PENDING:'等待費用回報', DONE:'處理完成' }
+const phaseLabels: Record<string, string> = { PREPARE:'準備核對', RESIZING:'確認止蝕調整', READY:'準備賣出', SUBMITTING:'確認賣單結果', SUBMITTING_BE:'核對新增保本止蝕', BE_REJECTED:'保本止蝕被拒絕', OPEN:'賣單已提交', SETTLE:'核對剩餘止蝕', RESTORING:'確認剩餘止蝕', FEE_PENDING:'等待費用回報', DONE:'處理完成' }
 const money = (n?: number | null) => typeof n === 'number' ? `$${n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 4})}` : '—'
 async function request(action: string, body?: unknown) {
   const response = await fetchWithTimeout(`/api/zero-cost/${action}`, { cache: 'no-store', timeout: 35000,
@@ -111,9 +111,10 @@ export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, 
             <p>預計收回 <b>{money(preview.expected_gross)}</b>（未扣費用）</p>
             <p>預計保留 <b>{preview.keep_qty} 股</b></p>
             {preview.stop && <p>原止蝕 {money(preview.stop.aux_price)}：{preview.stop.original_qty} → {preview.keep_qty} 股</p>}
-            {partial && <p>成交後止蝕推至 {money(preview.break_even)} · 現有 {preview.stops?.length || 0} 張止蝕</p>}
+            {partial && <p>{preview.stops?.length ? `成交後止蝕推至 ${money(preview.break_even)} · 現有 ${preview.stops.length} 張止蝕` : `成交後為剩餘 ${preview.keep_qty} 股新增保本止蝕 ${money(preview.break_even)}`}</p>}
           </div>
-          {(preview.stop || partial) && <p className="text-xs text-warning">會先調整原止蝕股數，再提交賣單。掛單期間，待賣股數不受原止蝕保護；取消或部分成交後會重新核對。</p>}
+          {(preview.stop || partial && !!preview.stops?.length) && <p className="text-xs text-warning">會先調整原止蝕股數，再提交賣單。掛單期間，待賣股數不受原止蝕保護；取消或部分成交後會重新核對。</p>}
+          {partial && !preview.stops?.length && <p className="text-xs text-warning">目前沒有原止蝕。賣單結束且有成交後才為剩餘股數新增保本止蝕。</p>}
           <label className="flex gap-2 text-sm"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} />我已核實{partial ? '股數、限價及保本止蝕' : `本金、股數、限價${preview.stop ? '及止蝕調整' : ''}`}，確認真實賣出。</label>
           <div className="flex gap-2"><button disabled={busy} className="rounded bg-secondary px-4 py-2" onClick={() => setReview(false)}>返回修改</button><button disabled={busy || !agreed} className="flex-1 rounded bg-primary py-2 font-medium text-black disabled:opacity-40" onClick={confirm}>{busy ? '正在確認…' : '確認賣出'}</button></div>
         </>}

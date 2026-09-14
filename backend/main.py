@@ -1101,7 +1101,7 @@ def _audit_protection(host, port):
     import futu
     with _audit_lock:
         state = _load_protection()
-        records = _load_order_history_from_file()
+        records = _load_order_history_from_file() + _zero_cost_protection_records()
         grouped = {}
         for record in records:
             if record.get('acc_id') and record.get('trd_env') and record.get('symbol'):

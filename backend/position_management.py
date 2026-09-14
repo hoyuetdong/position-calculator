@@ -30,7 +30,7 @@ def partial_plan(orders, code, held, denominator):
         if stop['aux_price'] <= 0:
             raise ValueError('止蝕觸發價無效')
         stops.append(stop)
-    if not stops or sum(s['original_qty'] for s in stops) != held:
+    if stops and sum(s['original_qty'] for s in stops) != held:
         raise ValueError('請先補齊與持倉股數一致的止蝕單，再使用分批賣出')
     keep = int(held) - quantity
     if keep < len(stops):
@@ -123,6 +123,18 @@ def partial_tick(job, broker, save):
             if found: orders[stop['order_id']] = found
     if check_intent(job, orders, save):
         return
+    if job['phase'] == 'SUBMITTING_BE':
+        row = broker.lookup(job, job.get('be_stop_id'), job['be_remark'])
+        if not row:
+            raise ValueError('新增保本止蝕結果待核對，不會重複提交')
+        if (row.get('code') != job['code'] or row.get('trd_side') != 'SELL' or row.get('order_type') != 'STOP'
+                or finite(row.get('qty', 0)) != job['be_qty'] or finite(row.get('aux_price', 0)) != job['break_even']
+                or str(row.get('order_status')) not in {'SUBMITTED', 'WAITING_SUBMIT', 'FILLED_PART', 'FILLED_ALL'}):
+            raise ValueError('新增保本止蝕資料或狀態不符，請核對富途訂單')
+        event(job, '新增保本止蝕已確認', be_stop_id=str(row['order_id']), remaining_qty=held, phase='DONE', achieved=False)
+        save(); return
+    if job['phase'] == 'BE_REJECTED':
+        raise ValueError('券商拒絕新增保本止蝕，請核對通知中的原因及富途持倉')
     others = active_orders(orders, job['code'])
     for sid in [s['order_id'] for s in job['stops']] + [job.get('order_id')]:
         others.pop(sid, None)
@@ -136,7 +148,7 @@ def partial_tick(job, broker, save):
             job['preparation_checked'] = True; save()
         if held != job['held_qty']:
             event(job, '持倉已變更，放棄提交賣單並核對止蝕', phase='SETTLE'); save(); return
-        if not adjust_stops(job, broker, orders, job['keep_qty'], False, save, preserve=True):
+        if job['stops'] and not adjust_stops(job, broker, orders, job['keep_qty'], False, save, preserve=True):
             return
         if phase == 'PREPARE':
             event(job, '待保留股數的止蝕已核對', phase='READY'); save(); return
@@ -168,5 +180,27 @@ def partial_tick(job, broker, save):
         stop_filled = sum(finite(orders.get(s['order_id'], {}).get('dealt_qty', 0)) for s in job['stops'])
         if held != job['held_qty'] - job.get('filled_qty', 0) - stop_filled:
             raise ValueError('持倉與已知成交不一致，暫停調整止蝕')
+        if not job['stops']:
+            if held and job.get('filled_qty', 0):
+                if job['break_even'] >= broker.reference_price(job):
+                    raise ValueError('現價不高於保本價，尚未能新增保本止蝕，會保留追蹤')
+                event(job, '已記錄新增保本止蝕意圖', phase='SUBMITTING_BE', be_qty=held,
+                      be_remark='vcp-be-' + job['id'][:24])
+                save()
+                try: result = broker.create_stop(job)
+                except (Deferred, NotSent):
+                    job['phase'] = 'SETTLE'; save(); raise
+                if result.get('success') and result.get('stop_order_id'):
+                    job['be_stop_id'] = str(result['stop_order_id']); save()
+                elif result.get('deferred'):
+                    job['phase'] = 'SETTLE'; save()
+                    raise ValueError(result['error'])
+                elif result.get('price_rejected') or not result.get('ambiguous') and not result.get('success'):
+                    event(job, result.get('error', '保本止蝕提交失敗'), phase='BE_REJECTED'); save()
+                    raise ValueError(result.get('error', '保本止蝕提交失敗'))
+                else:
+                    raise ValueError(result.get('error', '保本止蝕結果未確認'))
+                return
+            event(job, '賣單未成交或已無剩餘持倉，沒有新增止蝕', phase='DONE', remaining_qty=held, achieved=False); save(); return
         if adjust_stops(job, broker, orders, held, job.get('filled_qty', 0) > 0, save):
             event(job, '剩餘股數與止蝕已核對', phase='DONE', remaining_qty=held, achieved=False); save()
