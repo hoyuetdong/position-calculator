@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import { fetchWithTimeout } from '@/lib/fetchWithTimeout'
 
 const labels: Record<string, string> = {
+  FULL_EXIT: '全部平倉處理中',
+  FULL_EXIT_PREPARE:'準備平倉', FULL_EXIT_READY:'準備平倉', FULL_EXIT_SUBMITTING:'平倉單待確認', FULL_EXIT_OPEN:'平倉限價單已提交', FULL_EXIT_SETTLE:'核對平倉結果', FULL_EXIT_RESTORING_CLOSE:'恢復剩餘止蝕', FULL_EXIT_DONE:'平倉流程已結束',
   PARTIAL_EXIT: '分批賣出處理中',
   RECOVERY_PREPARE:'準備收回本金', RECOVERY_RESIZING:'調整止蝕股數', RECOVERY_READY:'準備賣出', RECOVERY_SUBMITTING:'賣單待確認', RECOVERY_OPEN:'收回本金賣單已提交', RECOVERY_SETTLE:'核對剩餘持倉', RECOVERY_RESTORING:'核對剩餘止蝕', RECOVERY_FEE_PENDING:'等待費用回報', RECOVERY_DONE:'收回本金流程完成',
   OK: '運作正常', DISCONNECTED: '連線中斷', COOLDOWN: 'API 冷卻中', DEGRADED: '核對未完成', STALE: '資料未更新', STARTING: '正在核對',

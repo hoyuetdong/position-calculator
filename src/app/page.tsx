@@ -189,7 +189,7 @@ function ZeroCostCalculator({
   accountSize: number
 }) {
   const [recoveryPosition, setRecoveryPosition] = useState<BrokerPosition | null>(null)
-  const [recoveryMode, setRecoveryMode] = useState<'recovery' | 'partial'>('recovery')
+  const [recoveryMode, setRecoveryMode] = useState<'recovery' | 'partial' | 'close'>('recovery')
   // Filter for US stocks only (not HK stocks)
   const usPositions = brokerPositions.filter(pos => !pos.symbol.endsWith('.HK'))
 
@@ -355,7 +355,7 @@ function ZeroCostCalculator({
                   return (
                     <div 
                       key={idx} 
-                      className="grid grid-cols-[minmax(0,1fr)_auto] xl:grid-cols-[minmax(110px,1fr)_minmax(0,2fr)_188px] gap-3 items-center px-4 py-3 mb-2 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
+                      className="grid grid-cols-[minmax(0,1fr)_auto] xl:grid-cols-[minmax(110px,1fr)_minmax(0,2fr)_286px] gap-3 items-center px-4 py-3 mb-2 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
                       onClick={() => {
                         // 点击填充到左边计算器
                         if (hasPL && plPercent > 0 && onSelectPosition) {
@@ -395,6 +395,7 @@ function ZeroCostCalculator({
                       <div className="col-span-2 xl:col-span-1 flex justify-end gap-2">
                         <div className="w-[90px]">{!achieved && pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('recovery');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-primary whitespace-nowrap">收回本金</button>}</div>
                         <div className="w-[90px]">{pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('partial');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-sky-400 whitespace-nowrap">分批賣出</button>}</div>
+                        <div className="w-[90px]">{pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('close');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-rose-300 whitespace-nowrap">全部平倉</button>}</div>
                       </div>
                     </div>
                   )

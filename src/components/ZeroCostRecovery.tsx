@@ -8,10 +8,10 @@ type Preview = { token?: string; bid: number | null; bid_time: string; quote_rea
   break_even?: number; stops?: Stop[];
   price: number | null; principal: number | null; quantity?: number; held_qty: number; keep_qty?: number; expected_gross?: number; stop: Stop | null }
 type Job = { id: string; symbol: string; phase: string; quantity: number; price: number; filled_qty: number;
-  kind?: string; break_even?: number;
+  kind?: string; break_even?: number; closed?: boolean; stops?: Stop[];
   principal: number; gross?: number; net?: number; fee?: number; remaining_principal?: number; achieved?: boolean;
   remaining_qty?: number; error?: string; events: {timestamp: string; message: string}[] }
-const phaseLabels: Record<string, string> = { PREPARE:'準備核對', RESIZING:'確認止蝕調整', READY:'準備賣出', SUBMITTING:'確認賣單結果', SUBMITTING_BE:'核對新增保本止蝕', BE_REJECTED:'保本止蝕被拒絕', OPEN:'賣單已提交', SETTLE:'核對剩餘止蝕', RESTORING:'確認剩餘止蝕', FEE_PENDING:'等待費用回報', DONE:'處理完成' }
+const phaseLabels: Record<string, string> = { PREPARE:'準備核對', RESIZING:'確認止蝕調整', RESTORING_CLOSE:'確認恢復原止蝕', READY:'準備賣出', SUBMITTING:'確認賣單結果', SUBMITTING_BE:'核對新增保本止蝕', BE_REJECTED:'保本止蝕被拒絕', OPEN:'賣單已提交', SETTLE:'核對剩餘止蝕', RESTORING:'確認剩餘止蝕', FEE_PENDING:'等待費用回報', DONE:'處理完成' }
 const money = (n?: number | null) => typeof n === 'number' ? `$${n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 4})}` : '—'
 async function request(action: string, body?: unknown) {
   const response = await fetchWithTimeout(`/api/zero-cost/${action}`, { cache: 'no-store', timeout: 35000,
@@ -20,8 +20,10 @@ async function request(action: string, body?: unknown) {
   if (!response.ok) throw Error(typeof data.detail === 'string' ? data.detail : '未能完成，請檢查輸入及處理紀錄')
   return data
 }
-export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, onSync}: {selected: BrokerPosition | null; mode?: 'recovery' | 'partial'; onClose: () => void; onSync: () => void}) {
+export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, onSync}: {selected: BrokerPosition | null; mode?: 'recovery' | 'partial' | 'close'; onClose: () => void; onSync: () => void}) {
   const partial = mode === 'partial'
+  const closing = mode === 'close'
+  const title = closing ? '全部平倉' : partial ? '分批賣出' : '收回本金'
   const [fraction, setFraction] = useState(3)
   const lastFills = useRef<string | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
@@ -49,7 +51,7 @@ export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, 
     setPreview(null);setReview(false);setAgreed(false);setError('');setPrincipal('');setPrice('');setFee('0');setFraction(3)
     if (!selected) return
     setBusy(true)
-    request('preview', {symbol:selected.symbol, account_id:selected.account_id || '', ...(partial ? {fraction:3} : {})}).then(data => {
+    request('preview', {symbol:selected.symbol, account_id:selected.account_id || '', ...(closing ? {close_all:true} : partial ? {fraction:3} : {})}).then(data => {
       if(active) {setPreview(data);setPrincipal(data.principal == null ? '' : String(data.principal));setPrice(data.price == null ? '' : String(data.price))}
     }).catch(e => {if(active) setError(e.message)}).finally(() => {if(active) setBusy(false)})
     return () => {active = false}
@@ -58,8 +60,8 @@ export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, 
     if (!selected) return
     setBusy(true);setError('')
     try {
-      const data = await request('preview', {symbol:selected.symbol, account_id:selected.account_id || '', principal:Number(principal), price:Number(price), fee_buffer:Number(fee), ...(partial ? {fraction} : {})})
-      if(!data.token) throw Error('請核實本金及限價')
+      const data = await request('preview', {symbol:selected.symbol, account_id:selected.account_id || '', principal:Number(principal), price:Number(price), fee_buffer:Number(fee), ...(closing ? {close_all:true} : partial ? {fraction} : {})})
+      if(!data.token) throw Error('請核實股數及限價')
       setPreview(data);setReview(true);setAgreed(false)
     } catch(e) {setError((e as Error).message)} finally {setBusy(false)}
   }
@@ -78,9 +80,10 @@ export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, 
       {jobsError && <p className="text-xs text-warning mt-2">{jobsError}</p>}
       <div className="max-h-72 overflow-auto divide-y divide-border text-xs">
         {jobs.map(job => <details key={job.id} className="py-3">
-          <summary className="cursor-pointer">{job.symbol} · <span className={job.error ? 'text-warning' : job.achieved ? 'text-profit' : 'text-sky-400'}>{job.error ? '需要核對' : job.achieved ? '本金已收回' : phaseLabels[job.phase] || job.phase}</span> · 成交 {job.filled_qty || 0}/{job.quantity} 股</summary>
-          <p className="mt-2">限價 {money(job.price)} · {job.kind === 'PARTIAL_EXIT' ? `分批賣出／保本價 ${money(job.break_even)}` : `本金 ${money(job.principal)}`}</p>
+          <summary className="cursor-pointer">{job.symbol} · <span className={job.error ? 'text-warning' : job.achieved || job.closed ? 'text-profit' : 'text-sky-400'}>{job.error ? '需要核對' : job.closed ? '已全部平倉' : job.achieved ? '本金已收回' : phaseLabels[job.phase] || job.phase}</span> · 成交 {job.filled_qty || 0}/{job.quantity} 股</summary>
+          <p className="mt-2">限價 {money(job.price)} · {job.kind === 'FULL_EXIT' ? '全部平倉' : job.kind === 'PARTIAL_EXIT' ? `分批賣出／保本價 ${money(job.break_even)}` : `本金 ${money(job.principal)}`}</p>
           <p className="mt-1">{job.net === undefined ? `累計成交金額 ${money(job.gross)}（未扣費用）` : `實收 ${money(job.net)} · 費用 ${money(job.fee)} · 尚未收回 ${money(job.remaining_principal)}`}</p>
+          {job.kind === 'FULL_EXIT' && !!job.stops?.length && <p className="mt-1">原定止蝕：{job.stops.map(s => `${money(s.aux_price)}（${s.original_qty} 股）`).join('、')}</p>}
           {job.remaining_qty !== undefined && <p className="mt-1">剩餘持倉 {job.remaining_qty} 股</p>}
           {['PREPARE','READY'].includes(job.phase) && <button className="mt-2 text-sky-400" onClick={async () => {try {const updated = await request('cancel', {token:job.id,confirmed:true});setJobs(current => current.map(j => j.id === updated.id ? updated : j))} catch(e) {setJobsError((e as Error).message)}}}>取消準備</button>}
           {job.phase === 'OPEN' && <p className="mt-2 text-muted-foreground">如需取消賣單，請在富途操作，系統會重新核對剩餘止蝕。</p>}
@@ -91,32 +94,34 @@ export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, 
     </details>}
     {selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-labelledby="recover-title">
       <div className="w-full max-w-md max-h-[90vh] overflow-auto rounded-xl border border-border bg-card p-5 space-y-4">
-        <div className="flex justify-between items-center"><h3 id="recover-title" className="font-semibold text-lg">{selected.symbol} · {partial ? '分批賣出' : '收回本金'}</h3><button disabled={busy} onClick={onClose} aria-label="關閉" className="px-2">✕</button></div>
+        <div className="flex justify-between items-center"><h3 id="recover-title" className="font-semibold text-lg">{selected.symbol} · {title}</h3><button disabled={busy} onClick={onClose} aria-label="關閉" className="px-2">✕</button></div>
         <p className="text-xs text-warning">真實交易 · 限價賣出 · 當日有效 · 全時段</p>
         {preview && <p className="text-xs text-muted-foreground">買一價 {money(preview.bid)} <button disabled={busy || review} className="ml-2 text-sky-400 disabled:opacity-40" onClick={() => preview.bid && setPrice(String(preview.bid))}>使用買一價</button><br/>報價讀取：{preview.quote_read_at ? new Date(preview.quote_read_at).toLocaleString('zh-HK', {hour12:false}) : '未取得'}</p>}
         {preview?.warning && <p className="text-xs text-warning">{preview.warning}</p>}
         {!review ? <>
-          {partial ? <><label className="block text-sm">賣出比例<select className="ml-3 rounded bg-secondary p-2" value={fraction} onChange={e => setFraction(Number(e.target.value))}>{[2,3,4].map(n => <option key={n} value={n}>1/{n}</option>)}</select></label>
+          {closing ? <p className="text-sm">全部賣出 {preview?.held_qty ?? selected.quantity} 股</p> : partial ? <><label className="block text-sm">賣出比例<select className="ml-3 rounded bg-secondary p-2" value={fraction} onChange={e => setFraction(Number(e.target.value))}>{[2,3,4].map(n => <option key={n} value={n}>1/{n}</option>)}</select></label>
             <p className="text-xs text-muted-foreground">股數向下取整 · 成交後剩餘止蝕推至平均買入成本 {money(preview?.break_even)}（不含賣出費用）；較高的原止蝕不會下調。</p></> : <>
             <label className="block text-sm">尚未收回本金 ($)<input className="mt-1 w-full rounded bg-secondary p-2" type="number" min="0" step="0.01" value={principal} onChange={e => setPrincipal(e.target.value)} /></label>
             <p className="text-xs text-muted-foreground">預填券商攤薄成本估算，請核實過往買賣及費用後確認。</p></>}
           <div className="grid grid-cols-2 gap-3">
             <label className="text-sm">賣出限價 ($)<input className="mt-1 w-full rounded bg-secondary p-2" type="number" min="0" step="0.01" value={price} onChange={e => setPrice(e.target.value)} /></label>
-            {!partial && <label className="text-sm">費用預留 ($)<input className="mt-1 w-full rounded bg-secondary p-2" type="number" min="0" step="0.01" value={fee} onChange={e => setFee(e.target.value)} /></label>}
+            {!partial && !closing && <label className="text-sm">費用預留 ($)<input className="mt-1 w-full rounded bg-secondary p-2" type="number" min="0" step="0.01" value={fee} onChange={e => setFee(e.target.value)} /></label>}
           </div>
-          <button disabled={busy || (!partial && !Number(principal)) || !Number(price)} className="w-full rounded bg-primary py-2 font-medium text-black disabled:opacity-40" onClick={prepare}>{busy ? '正在核對…' : '更新報價及預覽賣單'}</button>
+          <button disabled={busy || (!partial && !closing && !Number(principal)) || !Number(price)} className="w-full rounded bg-primary py-2 font-medium text-black disabled:opacity-40" onClick={prepare}>{busy ? '正在核對…' : '更新報價及預覽賣單'}</button>
         </> : preview && <>
           <div className="rounded bg-secondary p-3 space-y-2 text-sm">
             <p>賣出 <b>{preview.quantity} 股</b> × {money(Number(price))}</p>
             <p>預計收回 <b>{money(preview.expected_gross)}</b>（未扣費用）</p>
             <p>預計保留 <b>{preview.keep_qty} 股</b></p>
             {preview.stop && <p>原止蝕 {money(preview.stop.aux_price)}：{preview.stop.original_qty} → {preview.keep_qty} 股</p>}
+            {closing && <p>撤銷原止蝕：{preview.stops?.length || 0} 張</p>}
             {partial && <p>{preview.stops?.length ? `成交後止蝕推至 ${money(preview.break_even)} · 現有 ${preview.stops.length} 張止蝕` : `成交後為剩餘 ${preview.keep_qty} 股新增保本止蝕 ${money(preview.break_even)}`}</p>}
           </div>
+          {closing && <p className="text-xs text-warning">先確認原止蝕撤銷，再提交全部股數的限價賣單；限價不保證成交。掛單期間沒有原止蝕保護；部分成交後取消或到期，會按剩餘股數恢復原止蝕。恢復未成功時會保留通知及原價供核對。</p>}
           {(preview.stop || partial && !!preview.stops?.length) && <p className="text-xs text-warning">會先調整原止蝕股數，再提交賣單。掛單期間，待賣股數不受原止蝕保護；取消或部分成交後會重新核對。</p>}
           {partial && !preview.stops?.length && <p className="text-xs text-warning">目前沒有原止蝕。賣單結束且有成交後才為剩餘股數新增保本止蝕。</p>}
-          <label className="flex gap-2 text-sm"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} />我已核實{partial ? '股數、限價及保本止蝕' : `本金、股數、限價${preview.stop ? '及止蝕調整' : ''}`}，確認真實賣出。</label>
-          <div className="flex gap-2"><button disabled={busy} className="rounded bg-secondary px-4 py-2" onClick={() => setReview(false)}>返回修改</button><button disabled={busy || !agreed} className="flex-1 rounded bg-primary py-2 font-medium text-black disabled:opacity-40" onClick={confirm}>{busy ? '正在確認…' : '確認賣出'}</button></div>
+          <label className="flex gap-2 text-sm"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} />我已核實{closing ? '全部股數、限價及撤銷原止蝕' : partial ? '股數、限價及保本止蝕' : `本金、股數、限價${preview.stop ? '及止蝕調整' : ''}`}，確認真實賣出。</label>
+          <div className="flex gap-2"><button disabled={busy} className="rounded bg-secondary px-4 py-2" onClick={() => setReview(false)}>返回修改</button><button disabled={busy || !agreed} className="flex-1 rounded bg-primary py-2 font-medium text-black disabled:opacity-40" onClick={confirm}>{busy ? '正在確認…' : closing ? '確認全部平倉' : '確認賣出'}</button></div>
         </>}
         {error && <p role="alert" className="text-sm text-loss">{error}</p>}
       </div>
