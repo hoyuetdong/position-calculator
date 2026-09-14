@@ -922,8 +922,10 @@ export default function Home() {
   }, [])
   
   // Place order function
+  const orderInFlight = useRef(false)
   const handlePlaceOrder = useCallback(async () => {
-    if (!ticker || !entryPrice || shares <= 0) return
+    if (!ticker || !entryPrice || shares <= 0 || orderInFlight.current) return
+    orderInFlight.current = true
 
     setOrdering(true)
     setOrderResult(null)
@@ -955,7 +957,7 @@ export default function Home() {
       const finalOrderType = effectiveOrderType === 'STOP' ? 'MARKET' : effectiveOrderType
       let finalPrice = parseFloat(entryPrice)
 
-      const response = await placeOrder({
+      const request = {
         symbol: ticker.toUpperCase(),
         price: finalPrice,
         quantity: shares,
@@ -964,7 +966,20 @@ export default function Home() {
         stop_loss_price: stopLoss ? parseFloat(stopLoss) : undefined,
         time_in_force: timeInForce,
         trigger_price: triggerPriceToUse,
-      })
+      }
+      let response = await placeOrder(request)
+      while (response.status === 'duplicate_confirmation_required' && response.duplicate_orders?.length) {
+        const existing = response.duplicate_orders
+        const details = existing.map(order => {
+          const type = ({ NORMAL: '限價', LIMIT: '限價', MARKET: '市價', STOP: '觸發單', STOP_LIMIT: '觸發限價' } as Record<string, string>)[order.order_type] || '委託'
+          const price = Number(order.price)
+          return `• 尚餘 ${order.remaining_qty} 股 · ${type} · ${Number.isFinite(price) && price > 0 ? `$${price.toFixed(2)}` : '價格待核對'} · 單號 …${order.order_id.slice(-8)}`
+        }).join('\n')
+        if (!window.confirm(`${ticker.toUpperCase()} 已有同方向（${direction === 'LONG' ? '買入' : '賣出'}）委託：\n${details}\n\n本次另下 ${shares} 股，並不會取代原單。\n是否仍要繼續？`)) {
+          throw new Error('已取消本次提交，原有委託不受影響。')
+        }
+        response = await placeOrder({ ...request, confirmed_duplicate_ids: existing.map(order => order.order_id) })
+      }
 
       setOrderResult({
         success: response.success,
@@ -986,6 +1001,7 @@ export default function Home() {
     }
     
     setOrdering(false)
+    orderInFlight.current = false
   }, [ticker, entryPrice, shares, direction, stopLoss, timeInForce, syncBrokerPositions, quoteData, triggerPrice])
   
   // Handle environment switch

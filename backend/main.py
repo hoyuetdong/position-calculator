@@ -1418,6 +1418,39 @@ def _unlock_trade(ctx, trade_pwd: str) -> bool:
     return True
 
 
+def _duplicate_entry_warning(host, port, market, account, env, code, side, confirmed):
+    rows, error = _broker_order_snapshot(host, port, market, account, env)
+    if error:
+        raise ValueError('暫時未能核對重複委託，尚未提交新單，請稍後再試：' + traditional(str(error)))
+    active = {'SUBMITTED', 'FILLED_PART', 'WAITING_SUBMIT', 'SUBMITTING', 'CANCELLING_PART', 'CANCELLING_ALL'}
+    candidates = dict(rows)
+    # Cover the short interval before the broker snapshot includes a new app order.
+    for record in _load_order_history_from_file():
+        order_id = str(record.get('entry_order_id', ''))
+        if order_id in candidates or record.get('completed') or record.get('acc_id') != account or record.get('trd_env') != env:
+            continue
+        if record.get('status') not in {'SUBMITTED', 'pending', 'WAITING_QUERY', 'QUERY_RETRY', 'partial'}:
+            continue
+        candidates[order_id] = dict(code=_to_futu_code(record.get('symbol', '')),
+            trd_side='SELL' if record.get('direction') == 'SHORT' else 'BUY',
+            order_status='SUBMITTED', qty=record.get('quantity', 0), dealt_qty=record.get('filled_qty', 0),
+            price=record.get('entry_price'), order_type=record.get('order_type', '待核對'))
+    duplicates = []
+    for order_id, row in candidates.items():
+        if str(row.get('code')) != code or str(row.get('trd_side')) != side.upper() or str(row.get('order_status')) not in active:
+            continue
+        remaining = max(0, float(row.get('qty', 0)) - float(row.get('dealt_qty', 0)))
+        if remaining:
+            duplicates.append({'order_id': str(order_id), 'remaining_qty': remaining,
+                'price': str(row.get('aux_price') if str(row.get('order_type')) == 'STOP' else row.get('price', '')),
+                'order_type': str(row.get('order_type', '')), 'status': str(row.get('order_status', ''))})
+    duplicates.sort(key=lambda row: row['order_id'])
+    if duplicates and not {row['order_id'] for row in duplicates}.issubset(set(confirmed or [])):
+        return {'success': False, 'status': 'duplicate_confirmation_required', 'duplicate_orders': duplicates,
+            'message': f'{code} 已有同方向未完成委託。新單尚未提交，請確認是否繼續。'}
+    return None
+
+
 def _guard_zero_cost(fn):
     @wraps(fn)
     def guarded(*args, **kwargs):
@@ -1444,6 +1477,7 @@ def _place_order(
     time_in_force: str = "DAY",  # DAY / GTC / GTD
     expire_date: Optional[str] = None,  # YYYY-MM-DD, only for GTD
     trigger_price: Optional[float] = None,  # Stop Entry觸發價
+    confirmed_duplicate_ids: Optional[List[str]] = None,
 ) -> Dict:
     """
     Place an order via Futu OpenD.
@@ -1501,10 +1535,6 @@ def _place_order(
     # Create trade context
     ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market)
     try:
-        # Unlock trade first
-        if not _unlock_trade(ctx, trade_pwd):
-            raise ValueError("Failed to unlock trade - check your trading password")
-        
         # Determine trade environment
         trd_env_enum = futu.TrdEnv.SIMULATE if trd_env.upper() == "SIMULATE" else futu.TrdEnv.REAL
         
@@ -1525,6 +1555,11 @@ def _place_order(
             raise ValueError(f"No {trd_env} ACTIVE accounts found for market {market}")
         
         acc_id = acc_ids[0]
+        warning = _duplicate_entry_warning(host, port, market, acc_id, trd_env, futu_code, side, confirmed_duplicate_ids)
+        if warning:
+            return warning
+        if not _unlock_trade(ctx, trade_pwd):
+            raise ValueError('未能解鎖交易，請檢查交易密碼')
         
         # Determine order type
         # 優先順序：
@@ -1755,6 +1790,7 @@ class OrderRequest(BaseModel):
     stop_loss_price: Optional[float] = None  # 止蝕價（倉位成交後自動觸發止蝕單）
     trigger_price: Optional[float] = None  # 觸發價（Stop Entry單用：突破呢個價自動成交）
     remark: Optional[str] = None
+    confirmed_duplicate_ids: List[str] = []
 
 
 class OrderResponse(BaseModel):
@@ -1764,6 +1800,7 @@ class OrderResponse(BaseModel):
     status: Optional[str] = None
     message: str
     timestamp: str
+    duplicate_orders: Optional[List[Dict]] = None
 
 
 class PendingStopOrder(BaseModel):
@@ -2151,13 +2188,15 @@ def place_order(order: OrderRequest):
             time_in_force=order.time_in_force,
             expire_date=order.expire_date,
             trigger_price=order.trigger_price,
+            confirmed_duplicate_ids=order.confirmed_duplicate_ids,
         )
         
         return OrderResponse(
-            success=True,
+            success=result.get('success', True),
             order_id=result.get("order_id"),
             stop_order_id=result.get("stop_order_id"),
             status=result.get("status"),
+            duplicate_orders=result.get('duplicate_orders'),
             message=result.get("message", "Order placed successfully"),
             timestamp=datetime.now(timezone.utc).isoformat(),
         )

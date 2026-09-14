@@ -494,7 +494,7 @@ class Stops(unittest.TestCase):
                     OrderType=enum(NORMAL='NORMAL', MARKET='MARKET', STOP='STOP'),
                     TimeInForce=enum(DAY='DAY', GTC='GTC'), TrdSide=enum(BUY='BUY', SELL='SELL'),
                     Session=enum(ALL='ALL', RTH='RTH'))
-        with patch.dict(sys.modules, {'futu': fake}), patch.object(m, '_unlock_trade', return_value=True):
+        with patch.dict(sys.modules, {'futu': fake}), patch.object(m, '_unlock_trade', return_value=True), patch.object(m, '_duplicate_entry_warning', return_value=None) as duplicate:
             m._place_order('AAPL', 100, 10, 'LIMIT', 'BUY', 'localhost', 1, trd_env='REAL', time_in_force='GTC')
             self.assertEqual(Context.calls[-1]['session'], 'ALL')
             self.assertEqual(Context.calls[-1]['price'], 100)
@@ -504,6 +504,47 @@ class Stops(unittest.TestCase):
             m._place_order('AAPL', 100, 10, 'MARKET', 'BUY', 'localhost', 1, trd_env='REAL', trigger_price=100)
             self.assertEqual(Context.calls[-1]['order_type'], 'STOP')
             self.assertEqual(Context.calls[-1]['session'], 'RTH')
+            duplicate.return_value = {'success': False, 'status': 'duplicate_confirmation_required', 'duplicate_orders': [{'order_id': 'old'}]}
+            before = len(Context.calls)
+            result = m._place_order('AAPL', 100, 10, 'LIMIT', 'BUY', 'localhost', 1, trd_env='REAL')
+            self.assertFalse(result['success'])
+            self.assertEqual(len(Context.calls), before)
+
+    def duplicate_check(self, rows, confirmed=None, error=None, records=None):
+        with patch.object(m, '_broker_order_snapshot', return_value=(rows, error)), patch.object(m, '_load_order_history_from_file', return_value=records or []):
+            return m._duplicate_entry_warning('localhost', 1, 'US', 42, 'REAL', 'US.SNDK', 'BUY', confirmed)
+
+    def test_duplicate_partial_and_waiting_orders_require_confirmation(self):
+        rows = {'one': dict(code='US.SNDK', trd_side='BUY', order_status='FILLED_PART', qty=9, dealt_qty=2, price=1585, order_type='NORMAL'),
+            'two': dict(code='US.SNDK', trd_side='BUY', order_status='WAITING_SUBMIT', qty=9, dealt_qty=0, price=1586, order_type='NORMAL')}
+        warning = self.duplicate_check(rows)
+        self.assertEqual([r['remaining_qty'] for r in warning['duplicate_orders']], [7, 9])
+        self.assertIsNone(self.duplicate_check(rows, ['one', 'two']))
+        self.assertIsNotNone(self.duplicate_check(rows, ['one']))
+
+    def test_duplicate_excludes_completed_cancelled_opposite_side_and_other_stock(self):
+        base = dict(code='US.SNDK', trd_side='BUY', order_status='SUBMITTED', qty=9, dealt_qty=0)
+        for change in [{'order_status': 'FILLED_ALL'}, {'order_status': 'CANCELLED_ALL'}, {'trd_side': 'SELL'}, {'code': 'US.MU'}]:
+            self.assertIsNone(self.duplicate_check({'one': {**base, **change}}))
+
+    def test_duplicate_local_record_covers_broker_cache_delay_and_account_scope(self):
+        record = dict(entry_order_id='new', symbol='SNDK', acc_id=42, trd_env='REAL', quantity=9, filled_qty=0, status='SUBMITTED', direction='LONG')
+        self.assertIsNotNone(self.duplicate_check({}, records=[record]))
+        for change in [{'acc_id': 43}, {'trd_env': 'SIMULATE'}, {'completed': True}]:
+            self.assertIsNone(self.duplicate_check({}, records=[{**record, **change}]))
+        self.assertIsNone(self.duplicate_check({'new': {'order_status': 'CANCELLED_ALL'}}, records=[record]))
+
+    def test_duplicate_query_failure_does_not_allow_submission(self):
+        with self.assertRaisesRegex(ValueError, '尚未提交新單'):
+            self.duplicate_check({}, error='timeout')
+
+    def test_duplicate_response_is_forwarded_without_success(self):
+        result = {'success': False, 'status': 'duplicate_confirmation_required', 'message': '請確認', 'duplicate_orders': [{'order_id': 'old'}]}
+        with patch.object(m, '_place_order', return_value=result) as submit:
+            response = m.place_order(m.OrderRequest(symbol='SNDK', price=100, quantity=9, confirmed_duplicate_ids=['old']))
+        self.assertFalse(response.success)
+        self.assertEqual(response.duplicate_orders, result['duplicate_orders'])
+        self.assertEqual(submit.call_args.kwargs['confirmed_duplicate_ids'], ['old'])
 
 
 

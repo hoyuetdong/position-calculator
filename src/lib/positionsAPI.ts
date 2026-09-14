@@ -50,6 +50,7 @@ export interface OrderRequest {
   expire_date?: string    // "YYYY-MM-DD", only for GTD
   stop_loss_price?: number
   trigger_price?: number  // Stop Entry觸發價
+  confirmed_duplicate_ids?: string[]
 }
 
 export interface OrderResponse {
@@ -59,6 +60,7 @@ export interface OrderResponse {
   status?: string
   message: string
   timestamp: string
+  duplicate_orders?: { order_id: string; remaining_qty: number; price: string; order_type: string; status: string }[]
 }
 
 export interface PendingStopOrder {
