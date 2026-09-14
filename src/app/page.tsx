@@ -518,7 +518,7 @@ export default function Home() {
       </div>
       <dl className="mt-2 grid grid-cols-3 gap-2">
         <div>
-          <dt className="text-[11px] text-muted-foreground">原定止蝕</dt>
+          <dt className="text-[11px] text-muted-foreground">{order.stop_price_adjustment ? '調整後止蝕' : '原定止蝕'}</dt>
           <dd className="mt-0.5 select-all font-mono text-sm font-semibold tabular-nums">{originalStopPrice(order.stop_loss_price)}</dd>
         </div>
         <div className="text-right">
@@ -530,6 +530,9 @@ export default function Home() {
           <dd className="mt-0.5 tabular-nums">{order.stop_loss_placed_qty || 0} 股</dd>
         </div>
       </dl>
+      {order.stop_price_adjustment && <p className="mt-2 text-[11px] text-muted-foreground">
+        原定 {originalStopPrice(order.original_stop_loss_price || 0)} · 成交價越過原止蝕，保留 {originalStopPrice(order.stop_price_adjustment.distance)} 距離
+      </p>}
       {!completed && order.last_error && <p className="mt-2 break-words border-l-2 border-warning/50 pl-2 text-[11px] leading-relaxed text-warning">{order.last_error}</p>}
       {!completed && (order.last_error || !['pending', 'partial'].includes(order.status)) && <div className="mt-2 flex flex-wrap items-center gap-2">
         <button type="button" disabled={retryingStop !== null} onClick={() => retryStop(order.entry_order_id)}

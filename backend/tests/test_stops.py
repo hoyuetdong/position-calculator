@@ -103,6 +103,79 @@ class Stops(unittest.TestCase):
         self.assertEqual(self.place.call_count, 1)
         self.assertEqual(m._pending_stop_orders['entry']['status'], 'SUBMISSION_UNKNOWN')
 
+    def crossed_fill(self):
+        m._update_pending_stop_order('entry', {'entry_price': 957, 'stop_loss_price': 941.36})
+        self.query.return_value = dict(status='FILLED_ALL', fill_qty=10, fill_price=939.26)
+
+    def test_crossed_fill_preserves_distance_and_audit(self):
+        self.crossed_fill(); self.tick()
+        self.assertEqual(self.place.call_args.args[4], 923.62)
+        record = json.loads(m._ORDER_HISTORY_FILE.read_text())[0]
+        self.assertEqual(record['original_stop_loss_price'], 941.36)
+        self.assertEqual(record['stop_price_adjustment']['distance'], 15.64)
+        self.assertEqual(record['stop_price_adjustment']['fill_price'], 939.26)
+        self.assertTrue(any('stop_price_adjustment' in e['changes'] for e in record['events']))
+        self.assertEqual(m.get_pending_stop_orders().completed_orders[0].stop_loss_price, 923.62)
+
+    def test_normal_fill_never_rebases_even_if_submission_price_rejected(self):
+        self.crossed_fill()
+        self.query.return_value['fill_price'] = 950
+        self.place.return_value = dict(success=False, price_rejected=True, error='市價已下跌')
+        self.tick()
+        self.assertEqual(self.place.call_args.args[4], 941.36)
+        self.assertNotIn('stop_price_adjustment', m._pending_stop_orders['entry'])
+
+    def test_crossed_fill_short_and_equal_boundary(self):
+        for fill in [110, 115]:
+            result = m._crossed_fill_stop_adjustment(
+                dict(direction='SHORT', entry_price=100, stop_loss_price=110), {'fill_price': fill})
+            self.assertEqual(result['stop_loss_price'], fill + 10)
+        self.assertEqual(m._crossed_fill_stop_adjustment(
+            dict(entry_price=100, stop_loss_price=90), {'fill_price': 90})['stop_loss_price'], 80)
+
+    def test_crossed_fill_missing_original_entry_requires_review(self):
+        self.query.return_value['fill_price'] = 80
+        self.tick()
+        self.place.assert_not_called()
+        self.assertEqual(m._pending_stop_orders['entry']['status'], 'FAILED_NEED_MANUAL')
+
+    def test_existing_stop_never_rebases(self):
+        for extra in [{'stop_loss_placed_qty': 3}, {'stop_order_ids': ['existing']}]:
+            self.assertEqual(m._crossed_fill_stop_adjustment(
+                dict(entry_price=100, stop_loss_price=90, **extra), {'fill_price': 80}), {})
+
+    def test_adjustment_is_frozen_after_restart_and_preflight_defer(self):
+        self.crossed_fill()
+        self.place.return_value = dict(success=False, deferred=True, error='cooldown')
+        self.tick()
+        m._init_pending_stops_from_file(); self.retry_now()
+        self.query.return_value['fill_price'] = 910
+        self.place.return_value = dict(success=True, stop_order_id='retry-stop')
+        self.tick()
+        self.assertEqual([c.args[4] for c in self.place.call_args_list], [923.62, 923.62])
+
+    def test_crossed_fill_unknown_does_not_resubmit(self):
+        self.crossed_fill()
+        self.place.side_effect = TimeoutError('timeout')
+        self.tick(); self.retry_now(); self.tick()
+        self.assertEqual(self.place.call_count, 1)
+        self.assertEqual(m._pending_stop_orders['entry']['stop_loss_price'], 923.62)
+
+    def test_partial_fill_stop_not_moved_for_later_fills(self):
+        self.crossed_fill()
+        self.query.return_value.update(status='FILLED_PART', fill_qty=4)
+        self.tick()
+        self.query.return_value.update(status='FILLED_ALL', fill_qty=10, fill_price=920)
+        self.tick()
+        self.assertEqual([c.args[3:5] for c in self.place.call_args_list], [(4, 923.62), (6, 923.62)])
+
+    def test_invalid_fill_data_never_guesses_adjustment(self):
+        for price in [None, 'N/A', float('nan'), 0, -1]:
+            self.assertEqual(m._crossed_fill_stop_adjustment(
+                dict(entry_price=100, stop_loss_price=90), {'fill_price': price}), {})
+        with self.assertRaises(ValueError):
+            m._crossed_fill_stop_adjustment(dict(entry_price=100, stop_loss_price=90), {'fill_price': 5})
+
     def test_explicit_price_rejection_waits_for_user_and_keeps_price(self):
         self.place.return_value = dict(success=False, price_rejected=True, error='價格被拒絕')
         self.tick()

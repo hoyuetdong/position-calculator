@@ -22,6 +22,7 @@ import logging
 import copy
 import math
 import tempfile
+from decimal import Decimal, ROUND_HALF_UP
 from broker_io import BrokerIO, Deferred, PushInbox
 from protection import coverage, transition, timeline_event, now_iso
 from opencc import OpenCC
@@ -746,6 +747,7 @@ def _query_order_status_and_fill(host: str, port: int, order_id: str, acc_id: in
         if row is not None:
             return {"status": str(row["order_status"]).upper(),
                     "fill_qty": int(float(row.get("dealt_qty", 0) or 0)),
+                    "fill_price": row.get("dealt_avg_price"),
                     "order_qty": int(float(row.get("qty", 0) or 0)), "acc_id": acc_id}
         if error:
             errors.append(error)
@@ -923,6 +925,39 @@ def _stop_capacity(host, port, info, quantity):
         ctx.close()
 
 
+def _crossed_fill_stop_adjustment(info, data):
+    """Rebase only a fill already beyond the original stop, before any stop exists.
+
+    Never use market quotes: a later adverse move must not widen an existing risk.
+    Persist the one-time adjustment so retries and later fills cannot rebase again.
+    """
+    if info.get('stop_price_adjustment') or info.get('stop_loss_placed_qty') or info.get('stop_order_ids'):
+        return {}
+    try:
+        fill = Decimal(str(data.get('fill_price')))
+        stop = Decimal(str(info['stop_loss_price']))
+    except Exception:
+        return {}
+    if not fill.is_finite() or fill <= 0 or not stop.is_finite() or stop <= 0:
+        return {}
+    short = info.get('direction') == 'SHORT'
+    if not (fill >= stop if short else fill <= stop):
+        return {}
+    try:
+        entry = Decimal(str(info.get('entry_price')))
+        distance = stop - entry if short else entry - stop
+        if not entry.is_finite() or entry <= 0 or not distance.is_finite() or distance <= 0:
+            raise ValueError()
+    except Exception:
+        raise ValueError('成交價已越過原止蝕價，但缺少有效的原入場價；請核對後設定止蝕，程式不會猜測距離')
+    adjusted = (fill + distance if short else fill - distance).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    if adjusted <= 0 or (adjusted <= fill if short else adjusted >= fill):
+        raise ValueError('保留原距離後的止蝕價無效，需要人工核對')
+    return {'stop_loss_price': float(adjusted), 'original_stop_loss_price': float(stop),
+        'stop_price_adjustment': {'reason': 'FILL_CROSSED_ORIGINAL_STOP', 'entry_price': float(entry),
+            'fill_price': float(fill), 'distance': float(distance), 'adjusted_at': now_iso()}}
+
+
 def _monitor_one(host, port, entry_order_id, info):
     # 手動重試同自動監控共用鎖，並重新讀取最新紀錄。
     with _stop_execution_lock:
@@ -998,6 +1033,14 @@ def _monitor_one_locked(host, port, entry_order_id, info):
                 _remove_pending_stop_order(entry_order_id)
             return
         _update_pending_stop_order(entry_order_id, {'flat_seen_at': None})
+        try:
+            adjustment = _crossed_fill_stop_adjustment(info, data)
+        except ValueError as exc:
+            _update_pending_stop_order(entry_order_id, {'status': 'FAILED_NEED_MANUAL', 'last_error': str(exc)})
+            return
+        if adjustment:
+            _update_pending_stop_order(entry_order_id, adjustment)
+            info = {**info, **adjustment}
         import hashlib
         remark = "vcp-sl-" + hashlib.sha256(f"{entry_order_id}:{filled}".encode()).hexdigest()[:32]
         intent = {"remark": remark, "target_qty": filled, "quantity": qty}
@@ -1729,6 +1772,8 @@ class PendingStopOrder(BaseModel):
     quantity: int
     filled_qty: Optional[int] = 0  # 已成交既數量
     stop_loss_price: float
+    original_stop_loss_price: Optional[float] = None
+    stop_price_adjustment: Optional[Dict] = None
     status: str  # "pending", "partial", "triggered", "failed", "cancelled"
     created_at: str = ""
     last_error: Optional[str] = None
@@ -1790,7 +1835,8 @@ def order_history(symbol: str = '', offset: int = 0):
     records = [r for r in _load_order_history_from_file() + _zero_cost_history() if symbol.upper() in r.get('symbol', '').upper()]
     records.sort(key=lambda r: r.get('created_at', ''), reverse=True)
     allowed = {'entry_order_id', 'symbol', 'entry_price', 'stop_loss_price', 'quantity', 'filled_qty',
-        'stop_loss_placed_qty', 'status', 'created_at', 'events', 'direction'}
+        'stop_loss_placed_qty', 'status', 'created_at', 'events', 'direction',
+        'original_stop_loss_price', 'stop_price_adjustment'}
     return traditional({'total': len(records), 'orders': [{k:v for k,v in r.items() if k in allowed} for r in records[max(0,offset):max(0,offset)+25]]})
 
 
@@ -2200,6 +2246,8 @@ def get_pending_stop_orders():
             quantity=info["quantity"],
             filled_qty=info.get("filled_qty", 0),
             stop_loss_price=info["stop_loss_price"],
+            original_stop_loss_price=info.get('original_stop_loss_price'),
+            stop_price_adjustment=info.get('stop_price_adjustment'),
             status=info.get("status", "pending" if info.get("filled_qty", 0) == 0 else "partial"),
             created_at=info.get("created_at", ""),
             last_error=traditional(info.get("last_error")),

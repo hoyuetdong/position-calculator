@@ -66,6 +66,8 @@ export interface PendingStopOrder {
   symbol: string
   quantity: number
   stop_loss_price: number
+  original_stop_loss_price?: number | null
+  stop_price_adjustment?: { distance: number; fill_price: number } | null
   status: string
   filled_qty?: number
   stop_loss_placed_qty?: number

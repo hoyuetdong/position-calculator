@@ -54,7 +54,7 @@ def transition(state, key, active, message, symbol=''):
 
 
 def timeline_event(previous, current, timestamp=None):
-    fields = ('status', 'filled_qty', 'stop_loss_placed_qty', 'stop_order_ids', 'stop_loss_price', 'last_error', 'completed', 'entry_price', 'quantity', 'direction', 'order_type', 'time_in_force')
+    fields = ('status', 'filled_qty', 'stop_loss_placed_qty', 'stop_order_ids', 'stop_loss_price', 'last_error', 'completed', 'entry_price', 'quantity', 'direction', 'order_type', 'time_in_force', 'original_stop_loss_price', 'stop_price_adjustment')
     changes = {key: current.get(key) for key in fields if previous.get(key) != current.get(key)}
     if not previous:
         changes = {key: current.get(key) for key in fields if key in current}
