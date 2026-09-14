@@ -8,6 +8,7 @@ from test_stops import m
 from test_zero_cost import FakeBroker
 from position_management import partial_plan, partial_tick, cost_price
 from position_management_api import install
+from zero_cost_api import Draft, Confirm
 
 
 class Broker(FakeBroker):
@@ -131,3 +132,26 @@ class AutoStops(unittest.TestCase):
         self.mocks[0].return_value=True
         self.sync(); self.mocks[-1].return_value=1060; self.sync()
         self.assertFalse(self.b.writes)
+
+
+class FractionApi(unittest.TestCase):
+    def test_preview_and_confirmation_use_fraction_and_average_cost_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'order_history.json'
+            broker = Broker()
+            endpoint = lambda path: next(r.endpoint for r in m.app.routes if getattr(r, 'path', '') == path)
+            with patch.object(m, '_ORDER_HISTORY_FILE', path), patch.object(m, '_get_trade_env', return_value='REAL'), \
+                 patch.object(m, '_get_pending_stop_orders', return_value={}), patch.object(m, '_position_stops_busy', return_value=False), \
+                 patch.object(m._ZeroCostBroker, 'position', return_value={'qty':100,'average_cost':9,'diluted_cost':-5,'cost_price_valid':True}), \
+                 patch.object(m._ZeroCostBroker, 'orders', return_value=broker.orders), \
+                 patch.object(m._ZeroCostBroker, 'bid', return_value={'bid':12,'bid_time':'','quote_read_at':''}):
+                preview = endpoint('/api/zero-cost/preview')(Draft(symbol='AAPL',account_id='42',fraction=3))
+                self.assertEqual((preview['quantity'],preview['keep_qty'],preview['break_even']), (33,67,9))
+                confirm = endpoint('/api/zero-cost/confirm')
+                first = confirm(Confirm(token=preview['token'],confirmed=True))
+                second = confirm(Confirm(token=preview['token'],confirmed=True))
+                self.assertEqual(first['id'], second['id'])
+                self.assertEqual(first['kind'],'PARTIAL_EXIT')
+                self.assertEqual(first['phase'],'PREPARE')
+                self.assertEqual(len(json.loads(path.with_name('zero_cost_jobs.json').read_text())),1)
+                self.assertFalse(broker.writes)
