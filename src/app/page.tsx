@@ -373,8 +373,7 @@ function ZeroCostCalculator({
                       {/* 右侧：零成本信息 + 盈亏 */}
                       {achieved && <div className="text-right text-xs text-profit">
                         <div className="font-bold text-sm">已達成零成本持倉</div>
-                        <div>需賣出 0 股 · 保留 {pos.quantity.toLocaleString()} 股</div>
-                        <div>成本 ${pos.cost_price!.toFixed(2)} · 現價 {pos.current_price === null ? '—' : `$${pos.current_price.toFixed(2)}`}</div>
+                        <div>保留 {pos.quantity.toLocaleString()} 股</div>
                       </div>}
                       {!achieved && !hasPL && <span className="text-xs text-muted-foreground">成本／現價資料暫缺</span>}
                       {hasPL && (

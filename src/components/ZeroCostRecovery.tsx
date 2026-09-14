@@ -22,7 +22,7 @@ async function request(action: string, body?: unknown) {
 }
 export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, onSync}: {selected: BrokerPosition | null; mode?: 'recovery' | 'partial'; onClose: () => void; onSync: () => void}) {
   const partial = mode === 'partial'
-  const [fraction, setFraction] = useState(2)
+  const [fraction, setFraction] = useState(3)
   const lastFills = useRef<string | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -46,10 +46,10 @@ export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, 
   }, [])
   useEffect(() => {
     let active = true
-    setPreview(null);setReview(false);setAgreed(false);setError('');setPrincipal('');setPrice('');setFee('0');setFraction(2)
+    setPreview(null);setReview(false);setAgreed(false);setError('');setPrincipal('');setPrice('');setFee('0');setFraction(3)
     if (!selected) return
     setBusy(true)
-    request('preview', {symbol:selected.symbol, account_id:selected.account_id || '', ...(partial ? {fraction:2} : {})}).then(data => {
+    request('preview', {symbol:selected.symbol, account_id:selected.account_id || '', ...(partial ? {fraction:3} : {})}).then(data => {
       if(active) {setPreview(data);setPrincipal(data.principal == null ? '' : String(data.principal));setPrice(data.price == null ? '' : String(data.price))}
     }).catch(e => {if(active) setError(e.message)}).finally(() => {if(active) setBusy(false)})
     return () => {active = false}
