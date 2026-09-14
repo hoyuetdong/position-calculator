@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { fetchWithTimeout } from '@/lib/fetchWithTimeout'
 
 const labels: Record<string, string> = {
+  PARTIAL_EXIT: '分批賣出處理中',
   RECOVERY_PREPARE:'準備收回本金', RECOVERY_RESIZING:'調整止蝕股數', RECOVERY_READY:'準備賣出', RECOVERY_SUBMITTING:'賣單待確認', RECOVERY_OPEN:'收回本金賣單已提交', RECOVERY_SETTLE:'核對剩餘持倉', RECOVERY_RESTORING:'核對剩餘止蝕', RECOVERY_FEE_PENDING:'等待費用回報', RECOVERY_DONE:'收回本金流程完成',
   OK: '運作正常', DISCONNECTED: '連線中斷', COOLDOWN: 'API 冷卻中', DEGRADED: '核對未完成', STALE: '資料未更新', STARTING: '正在核對',
   RECOVERING_PRINCIPAL: '收回本金處理中', WAITING_STOP: '止蝕單待提交', COVERED: '已設定止蝕單', UNDER_PROTECTED: '止蝕單股數少於持倉', EXCESS_STOP: '止蝕單股數多於持倉', NO_POSITION: '已無持倉',
@@ -19,6 +20,7 @@ const price = (n?: number) => typeof n === 'number' ? `$${n.toFixed(2)}` : '未�
 type Event = { timestamp: string; kind: string; changes: Record<string, any> }
 type Order = { entry_order_id: string; symbol: string; created_at?: string; entry_price?: number; stop_loss_price?: number; quantity: number; status: string; events?: Event[] }
 type Snapshot = {
+  position_actions?: {symbol: string; phase: string; error?: string; events: {timestamp: string; message: string}[]}[];
   system_status: string; last_success_at?: string;
   active_alerts: { message: string }[];
   notifications: { id: string; message: string; kind: string; timestamp: string }[];
@@ -107,6 +109,13 @@ export default function ProtectionPanel() {
         {!data?.notifications.length && <p className="text-muted-foreground">目前沒有通知</p>}
       </div>
     </details>
+    {!!data?.position_actions?.length && <details>
+      <summary className="cursor-pointer">止蝕自動調整紀錄</summary>
+      <div className="mt-2 max-h-48 overflow-auto space-y-3">{data.position_actions.map((action, i) => <div key={i}>
+        <p className={action.error ? 'text-amber-400' : 'text-sky-400'}>{action.symbol} · {action.error || (action.phase === 'WATCHING' ? '已核對' : '處理中')}</p>
+        {action.events.slice(-3).map((e, j) => <p key={j} className="mt-1 text-muted-foreground">{date(e.timestamp)} · {e.message}</p>)}
+      </div>)}</div>
+    </details>}
     <details onToggle={e => setHistoryOpen(e.currentTarget.open)}>
       <summary className="cursor-pointer">完整訂單紀錄</summary>
       <input aria-label="搜尋訂單股票代號" placeholder="搜尋股票代號" value={search}

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 from zero_cost import calculate, plan_stop, tick, event, finite, NotSent
+from position_management import partial_plan, partial_tick, cost_price
 
 
 class Draft(BaseModel):
@@ -15,6 +16,7 @@ class Draft(BaseModel):
     price: float | None = None
     principal: float | None = None
     fee_buffer: float = Field(default=0, ge=0)
+    fraction: int | None = None
 
 
 class Confirm(BaseModel):
@@ -62,7 +64,12 @@ def install(m):
                 raise ValueError('訂單查詢失敗：' + str(error))
             return rows
         def snapshot(self, job):
-            return finite(self.position(job).get('qty', 0)), self.orders(job)
+            self.last_position = self.position(job)
+            return finite(self.last_position.get('qty', 0)), self.orders(job)
+        def reference_price(self, job):
+            value = finite(getattr(self, 'last_position', {}).get('nominal_price', 0))
+            if value <= 0: raise ValueError('現價資料無效，保留現有止蝕價')
+            return value
         def lookup(self, job, order_id=None, remark=None):
             for history in (False, True):
                 rows = self.orders(job, history)
@@ -143,7 +150,8 @@ def install(m):
 
     def public(job):
         allowed = {'id','symbol','account_id','env','phase','price','principal','fee_buffer','quantity','held_qty','keep_qty',
-                   'filled_qty','remaining_qty','gross','fee','net','remaining_principal','achieved','error','created_at','events','order_id','stop','expected_gross'}
+                   'filled_qty','remaining_qty','gross','fee','net','remaining_principal','achieved','error','created_at','events','order_id','stop','expected_gross',
+                   'kind','fraction','break_even','stops'}
         return m.traditional({k:v for k,v in job.items() if k in allowed})
 
     @m.app.get('/api/zero-cost/jobs', dependencies=[Depends(m.verify_api_key)])
@@ -164,12 +172,17 @@ def install(m):
                 job = {'code':'US.'+symbol, 'symbol':symbol, 'account_id':body.account_id, 'env':'REAL'}
                 if is_busy(body.account_id, job['code']):
                     raise ValueError('此持倉已有收回本金流程，請查看處理紀錄')
+                if m._position_stops_busy(body.account_id, job['code']):
+                    raise ValueError('此持倉的止蝕正在調整，請稍後再試')
                 if any(m._to_futu_code(p['symbol']) == job['code'] and str(p.get('acc_id')) == body.account_id for p in m._get_pending_stop_orders().values()):
                     raise ValueError('此股票仍有入場／補止蝕追蹤，請待處理完成')
                 b = Broker(); position = b.position(job); held = finite(position.get('qty', 0))
                 if held <= 0 or int(held) != held:
                     raise ValueError('沒有可處理的整股做多持倉')
-                stop = plan_stop(b.orders(job), job['code'], held)
+                orders = b.orders(job)
+                partial = partial_plan(orders, job['code'], held, body.fraction) if body.fraction is not None else None
+                stop = None if partial else plan_stop(orders, job['code'], held)
+                break_even = cost_price(position) if partial else None
                 quote = {'bid': None, 'bid_time': '', 'quote_read_at': ''}
                 warning = ''
                 try: quote = b.bid(job['code'])
@@ -182,6 +195,23 @@ def install(m):
                 price = body.price if body.price is not None else quote['bid']
                 result = {**quote, 'warning': warning, 'principal': principal, 'price': price, 'held_qty':held,
                           'stop':stop, 'env':'REAL', 'account_id':body.account_id, 'symbol':symbol}
+                if partial:
+                    result.update(**partial, break_even=break_even, fraction=body.fraction, kind='PARTIAL_EXIT')
+                    if price is None: return m.traditional(result)
+                    price = finite(price)
+                    if price <= max(break_even, max(s['aux_price'] for s in partial['stops'])):
+                        message = '分批賣出限價須高於保本價及原止蝕價'
+                        if body.price is not None: raise ValueError(message)
+                        result['warning'] = message; return m.traditional(result)
+                    token = uuid.uuid4().hex
+                    for k,v in list(drafts.items()):
+                        if time.time() - v['at'] > 120: drafts.pop(k, None)
+                    if len(drafts) >= 100: raise ValueError('預覽過多，請稍後再試')
+                    numbers = {**partial, 'expected_gross': round(partial['quantity'] * price, 4)}
+                    result.update(numbers, token=token)
+                    drafts[token] = {'at':time.time(), 'job': {**job, **numbers, 'kind':'PARTIAL_EXIT', 'fraction':body.fraction,
+                        'break_even':break_even, 'held_qty':held, 'stop':None, 'price':price, 'principal':0, 'fee_buffer':0}}
+                    return m.traditional(result)
                 if principal is not None and principal <= 0:
                     result['warning'] = '券商成本顯示本金已收回；如不符，請核實並修改尚未收回本金'
                 if price is not None and principal is not None and principal > 0:
@@ -216,8 +246,9 @@ def install(m):
             if m._get_trade_env() != 'REAL': raise HTTPException(409, '交易環境已變更，請重新確認')
             job = dict(draft['job'])
             if is_busy(job['account_id'], job['code']): raise HTTPException(409, '已有處理中的收回本金流程')
+            if m._position_stops_busy(job['account_id'], job['code']): raise HTTPException(409, '止蝕正在調整，請重新預覽')
             job.update(id=body.token, remark='vcp-zc-'+body.token[:24], phase='PREPARE', created_at=datetime.now(timezone.utc).isoformat(), filled_qty=0)
-            event(job, '使用者確認收回本金、本金金額及止蝕調整')
+            event(job, '使用者確認分批賣出及保本止蝕' if job.get('kind') == 'PARTIAL_EXIT' else '使用者確認收回本金、本金金額及止蝕調整')
             jobs[body.token] = job; save(jobs)
             return public(job)
 
@@ -227,7 +258,10 @@ def install(m):
             jobs = load(); job = jobs.get(body.token)
             if not body.confirmed or not job or job['phase'] not in {'PREPARE','READY'}:
                 raise HTTPException(409, '已開始提交或正在核對，不能取消準備；請查看紀錄及富途訂單')
-            if job['phase'] == 'PREPARE' or not job.get('stop'):
+            if job.get('kind') == 'PARTIAL_EXIT':
+                if job.get('stop_intent'): raise HTTPException(409, '止蝕調整待確認，請稍後再試')
+                event(job, '使用者取消分批賣出準備，將恢復剩餘止蝕', phase='SETTLE')
+            elif job['phase'] == 'PREPARE' or not job.get('stop'):
                 event(job, '使用者取消準備，沒有提交賣單', phase='DONE', achieved=False, remaining_principal=job['principal'])
             else:
                 event(job, '使用者取消準備，將核對及恢復原止蝕', phase='SETTLE')
@@ -240,30 +274,32 @@ def install(m):
             for job in jobs.values():
                 if job['phase'] == 'DONE' or time.time() < job.get('next_at', 0): continue
                 try:
-                    tick(job, Broker(), lambda: save(jobs))
+                    (partial_tick if job.get('kind') == 'PARTIAL_EXIT' else tick)(job, Broker(), lambda: save(jobs))
                     job.pop('error', None)
                 except Exception as exc:
                     message = m.traditional(str(exc))
                     if job.get('error') != message: event(job, message)
                     job['error'] = message
                 job['next_at'] = time.time() + (300 if job['phase'] == 'FEE_PENDING' else 30)
+                if job.get('kind') == 'PARTIAL_EXIT': job['events'] = job.get('events', [])[-200:]
                 save(jobs)
     def adjust_coverage(result, account, env, orders):
         for j in load().values():
-            if j['phase'] == 'DONE' or j.get('error') or not j.get('stop') or j['account_id'] != str(account) or j['env'] != env or j['code'] != result['code']: continue
+            if j['phase'] == 'DONE' or j.get('error') or not (j.get('stop') or j.get('stops')) or j['account_id'] != str(account) or j['env'] != env or j['code'] != result['code']: continue
             configured = result['protected_qty'] + result.get('waiting_qty', 0)
             if configured != j['keep_qty'] or result['held_qty'] < configured: continue
             row = orders.get(j.get('order_id'))
             reserved = max(0, float(row.get('qty',0))-float(row.get('dealt_qty',0))) if row and str(row.get('order_status')) in {'SUBMITTED','WAITING_SUBMIT','FILLED_PART'} else 0
-            preparing = j['phase'] in {'RESIZING','READY','SUBMITTING'} and result['held_qty'] == j['held_qty']
+            preparing = j['phase'] in {'PREPARE','RESIZING','READY','SUBMITTING'} and result['held_qty'] == j['held_qty']
             if preparing or reserved and configured + reserved == result['held_qty']:
-                result['status'] = 'RECOVERING_PRINCIPAL'
+                result['status'] = 'PARTIAL_EXIT' if j.get('kind') == 'PARTIAL_EXIT' else 'RECOVERING_PRINCIPAL'
                 result['recovery_reserved_qty'] = result['held_qty'] - configured
         return result
     def alerts(state):
         for j in load().values():
+            name = '分批賣出' if j.get('kind') == 'PARTIAL_EXIT' else '收回本金'
             m.transition(state, 'zero-cost:' + j['id'], bool(j.get('error')) and j['phase'] != 'DONE',
-                f"{j['symbol']} 收回本金：{j['error']}" if j.get('error') else f"{j['symbol']} 收回本金流程已恢復。", j['symbol'])
+                f"{j['symbol']} {name}：{j['error']}" if j.get('error') else f"{j['symbol']} {name}流程已恢復。", j['symbol'])
     def history():
         return [{'entry_order_id':j.get('order_id', j['id']), 'symbol':j['symbol'], 'quantity':j['quantity'],
                  'entry_price':j['price'], 'stop_loss_price':j['stop']['aux_price'] if j.get('stop') else None,

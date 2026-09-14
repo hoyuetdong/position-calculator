@@ -1126,6 +1126,7 @@ def _audit_protection(host, port):
                     positions = [dict(row) for _, row in data.iterrows()]
                 finally:
                     ctx.close()
+                _sync_position_stops(account, env, market, positions, orders, items)
                 stage = '持倉與止蝕核對'
                 symbols = {(_to_futu_code(r['symbol']), r.get('direction', 'LONG')) for r in items}
                 for code, direction in symbols:
@@ -1199,6 +1200,7 @@ def _audit_protection(host, port):
                 transition(state, 'submission:' + record['entry_order_id'], False,
                     f"{record.get('symbol', '')}：止蝕提交狀態已確認。", record.get('symbol', ''))
         _zero_cost_alerts(state)
+        _position_stop_alerts(state)
         connected = _test_opend_connection(host, port)
         transition(state, 'connection', not connected, 'OpenD 連線中斷。' if not connected else 'OpenD 連線已恢復。')
         # 保留每次失敗的階段與原因，避免只有籠統通知而無從追查。
@@ -1456,6 +1458,8 @@ def _guard_zero_cost(fn):
     def guarded(*args, **kwargs):
         symbol = kwargs.get('symbol', args[0] if args else '')
         with _stop_execution_lock:
+            if _position_stops_busy(None, _to_futu_code(symbol)):
+                raise ValueError('此股票的止蝕正在調整，請完成核對後再提交新單')
             if _zero_cost_busy(None, _to_futu_code(symbol)):
                 raise ValueError('此股票正在收回本金，請先等待或核對現有流程')
             return fn(*args, **kwargs)
@@ -1864,6 +1868,7 @@ def protection_status():
     return traditional({'system_status': 'STALE' if stale else state.get('system_status', 'STARTING'),
         'last_success_at': state.get('last_success_at'), 'checks': list(state.get('checks', {}).values()),
         'notifications': list(reversed(state.get('notifications', [])))[:50],
+        'position_actions': _position_stop_records(),
         'active_alerts': [v for v in state.get('conditions', {}).values() if v.get('active')]})
 
 
@@ -2701,6 +2706,8 @@ def get_stock_kline(
 
 from zero_cost_api import install as _install_zero_cost
 _ZeroCostBroker = _install_zero_cost(sys.modules[__name__])
+from position_management_api import install as _install_position_management
+_install_position_management(sys.modules[__name__], _ZeroCostBroker)
 
 
 if __name__ == "__main__":
