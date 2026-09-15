@@ -190,8 +190,18 @@ function ZeroCostCalculator({
 }) {
   const [recoveryPosition, setRecoveryPosition] = useState<BrokerPosition | null>(null)
   const [recoveryMode, setRecoveryMode] = useState<'recovery' | 'partial' | 'close'>('recovery')
+  const [showDemoPositions, setShowDemoPositions] = useState(true)
   // Filter for US stocks only (not HK stocks)
   const usPositions = brokerPositions.filter(pos => !pos.symbol.endsWith('.HK'))
+  const demoPositions: BrokerPosition[] = [
+    {symbol:'NVDA', quantity:120, cost_price:100, current_price:150},
+    {symbol:'AAPL', quantity:45, cost_price:210, current_price:224},
+    {symbol:'TSLA', quantity:32, cost_price:320, current_price:288},
+    {symbol:'AMD', quantity:80, cost_price:0, current_price:180},
+    {symbol:'PLTR', quantity:200, cost_price:null, current_price:90},
+  ].map(p => ({...p, name:'版面示範', account_id:'demo-layout', position_side:'LONG', asset_type:'US Stock'}))
+  const displayPositions = showDemoPositions ? [...usPositions, ...demoPositions] : usPositions
+
 
   // 計算總持倉市值
   const totalPositionValue = usPositions.reduce((sum, p) => {
@@ -331,13 +341,16 @@ function ZeroCostCalculator({
               <Database className="w-5 h-5 text-primary" />
               富途美股持倉
             </h3>
+            <button type="button" onClick={() => setShowDemoPositions(v => !v)} className="text-xs text-muted-foreground hover:text-primary whitespace-nowrap">{showDemoPositions ? '隱藏示範' : '顯示示範'}</button>
           </div>
           
-          {usPositions.length > 0 ? (
+          {showDemoPositions && <p className="mb-3 text-xs text-muted-foreground">示範持倉僅供預覽，不能交易，亦不計入持倉佔比。</p>}
+          {displayPositions.length > 0 ? (
             <div className="space-y-3">
               {/* 按盈亏百分比由高至低排序 */}
-              {usPositions
+              {displayPositions
                 .map((pos, idx) => {
+                  const isDemo = pos.account_id === 'demo-layout'
                   const hasCost = pos.cost_price !== null && Number.isFinite(pos.cost_price)
                   const achieved = hasCost && pos.cost_price! <= 0
                   const hasPL = hasCost && pos.cost_price! > 0 && pos.current_price !== null && pos.current_price > 0
@@ -348,17 +361,17 @@ function ZeroCostCalculator({
                     ? Math.min(pos.quantity, Math.ceil(pos.quantity * pos.cost_price! / pos.current_price!)) : 0
                   const zeroCostShares = achieved ? pos.quantity : isProfit && hasPL ? pos.quantity - sharesToSell : 0
 
-                  return { pos, idx, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }
+                  return { pos, idx, isDemo, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }
                 })
                 .sort((a, b) => Number(b.achieved) - Number(a.achieved) || b.plPercent - a.plPercent)
-                .map(({ pos, idx, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }) => {
+                .map(({ pos, idx, isDemo, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }) => {
                   return (
                     <div 
                       key={idx} 
                       className="min-w-0 space-y-3 p-4 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
                       onClick={() => {
                         // 点击填充到左边计算器
-                        if (hasPL && plPercent > 0 && onSelectPosition) {
+                        if (!isDemo && hasPL && plPercent > 0 && onSelectPosition) {
                           onSelectPosition(Math.round(plPercent * 10) / 10, pos.quantity)
                         }
                       }}
@@ -366,6 +379,7 @@ function ZeroCostCalculator({
                       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                       <div className="flex items-center gap-3 shrink-0">
                         <span className="font-bold text-white text-base">{pos.symbol}</span>
+                        {isDemo && <span className="rounded bg-sky-400/15 px-1.5 py-0.5 text-[10px] text-sky-300">示範</span>}
                         <span className="text-sm text-gray-500">{pos.quantity} 股</span>
                       </div>
                       
@@ -393,9 +407,9 @@ function ZeroCostCalculator({
                       </div>
                       </div>
                       <div className="grid grid-cols-3 gap-2 border-t border-border/60 pt-3">
-                        <div className="min-w-0">{!achieved && pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('recovery');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-primary whitespace-nowrap">收回本金</button>}</div>
-                        <div className="min-w-0">{pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('partial');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-sky-400 whitespace-nowrap">分批賣出</button>}</div>
-                        <div className="min-w-0">{pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('close');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-rose-300 whitespace-nowrap">全部平倉</button>}</div>
+                        <div className="min-w-0">{!achieved && pos.position_side !== 'SHORT' && <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined} onClick={e => {if(isDemo) return;e.stopPropagation();setRecoveryMode('recovery');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-xs text-primary whitespace-nowrap">收回本金</button>}</div>
+                        <div className="min-w-0">{pos.position_side !== 'SHORT' && <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined} onClick={e => {if(isDemo) return;e.stopPropagation();setRecoveryMode('partial');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-xs text-sky-400 whitespace-nowrap">分批賣出</button>}</div>
+                        <div className="min-w-0">{pos.position_side !== 'SHORT' && <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined} onClick={e => {if(isDemo) return;e.stopPropagation();setRecoveryMode('close');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-xs text-rose-300 whitespace-nowrap">全部平倉</button>}</div>
                       </div>
                     </div>
                   )
