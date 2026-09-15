@@ -75,8 +75,9 @@ export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, 
     } catch(e) {setError((e as Error).message)} finally {setBusy(false)}
   }
   return <>
-    {(jobs.length > 0 || jobsError) && <details className="mt-4 border-t border-border pt-3" open>
-      <summary className="cursor-pointer text-sm font-medium">持倉賣出紀錄</summary>
+    <section className="rounded-xl border border-border bg-card p-6 min-w-0" aria-label="持倉賣出紀錄">
+      <h3 className="text-lg font-semibold">持倉賣出紀錄</h3>
+      {jobs.length === 0 && !jobsError && <p className="mt-3 text-sm text-muted-foreground">目前沒有賣出紀錄</p>}
       {jobsError && <p className="text-xs text-warning mt-2">{jobsError}</p>}
       <div className="max-h-72 overflow-auto divide-y divide-border text-xs">
         {jobs.map(job => <details key={job.id} className="py-3">
@@ -91,7 +92,7 @@ export default function ZeroCostRecovery({selected, mode = 'recovery', onClose, 
           <ol className="mt-2 space-y-1 text-muted-foreground">{job.events.map((e,i) => <li key={i}>{new Date(e.timestamp).toLocaleString('zh-HK', {hour12:false})} · {e.message}</li>)}</ol>
         </details>)}
       </div>
-    </details>}
+    </section>
     {selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-labelledby="recover-title">
       <div className="w-full max-w-md max-h-[90vh] overflow-auto rounded-xl border border-border bg-card p-5 space-y-4">
         <div className="flex justify-between items-center"><h3 id="recover-title" className="font-semibold text-lg">{selected.symbol} · {title}</h3><button disabled={busy} onClick={onClose} aria-label="關閉" className="px-2">✕</button></div>

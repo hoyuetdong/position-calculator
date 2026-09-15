@@ -8,6 +8,7 @@ from test_position_management import Broker
 from test_stops import m
 from full_exit import close_plan, close_tick
 from zero_cost_api import Draft, Confirm
+from fastapi import BackgroundTasks
 
 
 class CloseBroker(Broker):
@@ -41,6 +42,16 @@ class FullExit(unittest.TestCase):
         self.fill(100,'FILLED_ALL');self.until('DONE')
         self.assertTrue(self.job['closed']);self.assertEqual(self.job['remaining_qty'],0)
         self.assertFalse(any(w[0]=='restore' for w in self.b.writes))
+    def test_cancel_confirmation_immediately_submits_without_ready_wait(self):
+        self.tick()
+        self.assertEqual([w[0] for w in self.b.writes], ['modify'])
+        self.tick()
+        self.assertEqual(self.job['phase'], 'OPEN')
+        self.assertEqual([w[0] for w in self.b.writes], ['modify', 'sell'])
+    def test_no_stop_submits_in_first_pass(self):
+        self.b.orders={};self.job.update(close_plan({},'US.AAPL',100))
+        self.tick()
+        self.assertEqual(self.job['phase'],'OPEN')
     def test_partial_then_expiry_restores_original_price_and_remaining_qty(self):
         self.until('OPEN');self.fill(30,'FILLED_PART');self.tick()
         self.assertEqual(self.job['phase'],'OPEN')
@@ -54,7 +65,7 @@ class FullExit(unittest.TestCase):
     def test_cancel_preparation_before_any_write_does_not_recreate_stop(self):
         self.job['phase']='SETTLE';self.until('DONE');self.assertFalse(self.b.writes)
     def test_cancel_preparation_after_cancel_restores(self):
-        self.until('READY');self.job['phase']='SETTLE';self.until('DONE')
+        self.tick();self.job['phase']='SETTLE';self.until('DONE')
         self.assertFalse(any(w[0]=='sell' for w in self.b.writes))
         self.assertEqual(self.b.orders[self.job['restored_stop_ids'][0]]['qty'],100)
     def test_unknown_sell_is_not_resent_after_restart(self):
@@ -109,6 +120,40 @@ class FullExit(unittest.TestCase):
                  patch.object(m._ZeroCostBroker,'bid',return_value={'bid':7,'bid_time':'','quote_read_at':''}):
                 draft=endpoint('/api/zero-cost/preview')(Draft(symbol='AAPL',account_id='42',close_all=True))
                 self.assertEqual((draft['quantity'],draft['keep_qty']),(100,0))
-                confirm=endpoint('/api/zero-cost/confirm');a=confirm(Confirm(token=draft['token'],confirmed=True));b=confirm(Confirm(token=draft['token'],confirmed=True))
+                confirm=endpoint('/api/zero-cost/confirm')
+                tasks=BackgroundTasks()
+                a=confirm(Confirm(token=draft['token'],confirmed=True), tasks)
+                b=confirm(Confirm(token=draft['token'],confirmed=True), tasks)
+                self.assertEqual(len(tasks.tasks),1)
                 self.assertEqual(a['id'],b['id']);self.assertEqual(a['kind'],'FULL_EXIT')
                 self.assertEqual(len(json.loads(path.with_name('zero_cost_jobs.json').read_text())),1)
+
+    def test_fast_background_path_uses_two_passes_and_preserves_single_submission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'order_history.json'
+            endpoint=lambda path:next(r.endpoint for r in m.app.routes if getattr(r,'path','')==path)
+            with patch.object(m,'_ORDER_HISTORY_FILE',path),patch.object(m,'_get_trade_env',return_value='REAL'), \
+                 patch.object(m,'_get_pending_stop_orders',return_value={}),patch.object(m,'_position_stops_busy',return_value=False), \
+                 patch.object(m._ZeroCostBroker,'position',return_value={'qty':100}), \
+                 patch.object(m._ZeroCostBroker,'orders',return_value=self.b.orders), \
+                 patch.object(m._ZeroCostBroker,'bid',return_value={'bid':7,'bid_time':'','quote_read_at':''}), \
+                 patch.object(m._ZeroCostBroker,'snapshot',side_effect=self.b.snapshot), \
+                 patch.object(m._ZeroCostBroker,'modify',side_effect=self.b.modify), \
+                 patch.object(m._ZeroCostBroker,'sell',side_effect=self.b.sell), \
+                 patch('zero_cost_api.time.time',return_value=1000) as clock, \
+                 patch('zero_cost_api.time.sleep',side_effect=lambda seconds:setattr(clock,'return_value',clock.return_value+seconds)):
+                draft=endpoint('/api/zero-cost/preview')(Draft(symbol='AAPL',account_id='42',close_all=True))
+                tasks=BackgroundTasks()
+                endpoint('/api/zero-cost/confirm')(Confirm(token=draft['token'],confirmed=True),tasks)
+                task=tasks.tasks[0];task.func(*task.args,**task.kwargs)
+                jobs=json.loads(path.with_name('zero_cost_jobs.json').read_text())
+                self.assertEqual(jobs[draft['token']]['phase'],'OPEN')
+                self.assertEqual([w[0] for w in self.b.writes],['modify','sell'])
+                self.assertLessEqual(clock.return_value,1004)
+
+    def test_stop_filled_during_cancel_blocks_full_sale_even_with_stale_position(self):
+        self.tick()
+        self.b.stop.update(order_status='FILLED_ALL',dealt_qty=100)
+        self.tick()
+        self.assertEqual(self.job['phase'],'SETTLE')
+        self.assertFalse(any(w[0]=='sell' for w in self.b.writes))

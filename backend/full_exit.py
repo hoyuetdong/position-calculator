@@ -4,6 +4,10 @@ from broker_io import Deferred
 from position_management import check_intent, modify_once
 
 
+class ClosePending(ValueError):
+    """已發出撤單，等待券商確認；可在限頻內短暫優先核對。"""
+
+
 def close_plan(orders, code, held):
     if held <= 0 or int(held) != held:
         raise ValueError('沒有可平倉的整股做多持倉')
@@ -32,7 +36,10 @@ def close_tick(job, broker, save):
             if row: orders[stop['order_id']] = row
         if stop['order_id'] not in orders:
             raise ValueError('未能確認原止蝕狀態，不會提交平倉單')
-    if check_intent(job, orders, save): return
+    try:
+        check_intent(job, orders, save)
+    except ValueError as exc:
+        raise ClosePending(str(exc)) from exc
     others = active_orders(orders, job['code'])
     for sid in [s['order_id'] for s in job['stops']] + [job.get('order_id')] + job.get('restored_stop_ids', []):
         others.pop(sid, None)
@@ -49,12 +56,14 @@ def close_tick(job, broker, save):
             event(job, '持倉已變更，不提交平倉單，核對剩餘止蝕', phase='SETTLE'); save(); return
         for stop in job['stops']:
             row = orders[stop['order_id']]
+            if finite(row.get('dealt_qty', 0)):
+                event(job, '原止蝕已有成交，不提交全數平倉單，核對剩餘持倉', phase='SETTLE'); save(); return
             if row['order_status'] in TERMINAL: continue
             if row['order_status'] not in {'SUBMITTED', 'WAITING_SUBMIT'} or finite(row.get('dealt_qty', 0)):
                 raise ValueError('原止蝕正在成交或變更，暫不提交平倉單')
             modify_once(job, broker, row, stop['order_id'], 0, finite(row['aux_price']), save); return
         if phase == 'PREPARE':
-            event(job, '原止蝕已撤銷，準備提交全部平倉限價單', phase='READY'); save(); return
+            event(job, '原止蝕已撤銷，準備提交全部平倉限價單', phase='READY'); save()
         event(job, '已記錄全部平倉意圖', phase='SUBMITTING'); save()
         try: sid = broker.sell(job)
         except Deferred:

@@ -4,11 +4,11 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from fastapi import Depends, HTTPException
+from fastapi import BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from zero_cost import calculate, plan_stop, tick, event, finite, NotSent
 from position_management import partial_plan, partial_tick, cost_price
-from full_exit import close_plan, close_tick
+from full_exit import close_plan, close_tick, ClosePending
 
 
 class Draft(BaseModel):
@@ -277,7 +277,7 @@ def install(m):
             raise HTTPException(409, m.traditional(str(exc)))
 
     @m.app.post('/api/zero-cost/confirm', dependencies=[Depends(m.verify_api_key)])
-    def confirm(body: Confirm):
+    def confirm(body: Confirm, background_tasks: BackgroundTasks = None):
         with m._stop_execution_lock:
             jobs = load()
             if body.token in jobs: return public(jobs[body.token])
@@ -290,7 +290,10 @@ def install(m):
             if m._position_stops_busy(job['account_id'], job['code']): raise HTTPException(409, '止蝕正在調整，請重新預覽')
             job.update(id=body.token, remark='vcp-zc-'+body.token[:24], phase='PREPARE', created_at=datetime.now(timezone.utc).isoformat(), filled_qty=0)
             event(job, '使用者確認全部平倉及撤銷原止蝕' if job.get('kind') == 'FULL_EXIT' else '使用者確認分批賣出及保本止蝕' if job.get('kind') == 'PARTIAL_EXIT' else '使用者確認收回本金、本金金額及止蝕調整')
+            if job.get('kind') == 'FULL_EXIT': job['fast_until'] = time.time() + 12
             jobs[body.token] = job; save(jobs)
+            if background_tasks is not None and job.get('kind') == 'FULL_EXIT':
+                background_tasks.add_task(fast_close, body.token)
             return public(job)
 
     @m.app.post('/api/zero-cost/cancel', dependencies=[Depends(m.verify_api_key)])
@@ -309,19 +312,35 @@ def install(m):
             job.pop('error', None);job['next_at'] = 0;save(jobs)
             return public(job)
 
-    def monitor():
+    def fast_close(token):
+        # 只在使用者確認後短暫優先處理；共用鎖、快取及限頻，不提高全局輪詢頻率。
+        for attempt in range(4):
+            with m._stop_execution_lock:
+                job = load().get(token)
+                if not job or job['phase'] not in {'PREPARE', 'READY'} or time.time() > job.get('fast_until', 0): return
+            monitor(only_id=token)
+            if attempt < 3: time.sleep(2)
+
+    def monitor(only_id=None):
         with m._stop_execution_lock:
             jobs = load()
             for job in jobs.values():
+                if only_id is not None and job['id'] != only_id: continue
                 if job['phase'] == 'DONE' or time.time() < job.get('next_at', 0): continue
                 try:
                     (close_tick if job.get('kind') == 'FULL_EXIT' else partial_tick if job.get('kind') == 'PARTIAL_EXIT' else tick)(job, Broker(), lambda: save(jobs))
                     job.pop('error', None)
+                except ClosePending as exc:
+                    if time.time() >= job.get('fast_until', 0):
+                        message = m.traditional(str(exc))
+                        if job.get('error') != message: event(job, message)
+                        job['error'] = message
                 except Exception as exc:
                     message = m.traditional(str(exc))
                     if job.get('error') != message: event(job, message)
                     job['error'] = message
-                job['next_at'] = time.time() + (300 if job['phase'] == 'FEE_PENDING' else 30)
+                fast = job.get('kind') == 'FULL_EXIT' and job['phase'] in {'PREPARE', 'READY'} and not job.get('error') and time.time() < job.get('fast_until', 0)
+                job['next_at'] = time.time() + (2 if fast else 300 if job['phase'] == 'FEE_PENDING' else 30)
                 if job.get('kind') in {'PARTIAL_EXIT', 'FULL_EXIT'}: job['events'] = job.get('events', [])[-200:]
                 save(jobs)
     def adjust_coverage(result, account, env, orders):

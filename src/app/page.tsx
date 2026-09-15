@@ -324,17 +324,17 @@ function ZeroCostCalculator({
         </div>
 
         {/* Right Column - US Positions Card */}
-        <div className="bg-card border border-border rounded-xl p-6 flex flex-col h-full">
+        <div className="min-w-0 space-y-4">
+        <div className="bg-card border border-border rounded-xl p-6 min-w-0">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold flex items-center gap-2">
               <Database className="w-5 h-5 text-primary" />
               富途美股持倉
             </h3>
           </div>
-          <ZeroCostRecovery selected={recoveryPosition} mode={recoveryMode} onClose={() => setRecoveryPosition(null)} onSync={onSync} />
           
           {usPositions.length > 0 ? (
-            <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+            <div className="space-y-3">
               {/* 按盈亏百分比由高至低排序 */}
               {usPositions
                 .map((pos, idx) => {
@@ -355,7 +355,7 @@ function ZeroCostCalculator({
                   return (
                     <div 
                       key={idx} 
-                      className="grid grid-cols-[minmax(0,1fr)_auto] xl:grid-cols-[minmax(110px,1fr)_minmax(0,2fr)_286px] gap-3 items-center px-4 py-3 mb-2 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
+                      className="min-w-0 space-y-3 p-4 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
                       onClick={() => {
                         // 点击填充到左边计算器
                         if (hasPL && plPercent > 0 && onSelectPosition) {
@@ -363,26 +363,25 @@ function ZeroCostCalculator({
                         }
                       }}
                     >
-                      {/* 左侧：股票代号 + 持股数量 */}
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                      <div className="flex items-center gap-3 shrink-0">
                         <span className="font-bold text-white text-base">{pos.symbol}</span>
                         <span className="text-sm text-gray-500">{pos.quantity} 股</span>
                       </div>
                       
-                      <div className="text-right min-w-0">
+                      <div className="min-w-0 text-sm">
                       {/* 右侧：零成本信息 + 盈亏 */}
-                      {achieved && <div className="text-right text-xs text-profit">
+                      {achieved && <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-profit">
                         <div className="font-bold text-sm">已達成零成本持倉</div>
-                        <div>保留 {pos.quantity.toLocaleString()} 股</div>
                       </div>}
                       {!achieved && !hasPL && <span className="text-xs text-muted-foreground">成本／現價資料暫缺</span>}
                       {hasPL && (
-                        <div className="flex flex-wrap justify-end items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                           {/* 盈利且有正数才显示零成本信息 */}
                           {isProfit && plPercent > 0 && (
                             <span className="text-xs text-warning">
-                              零成本需賣出: <span className="font-bold">{sharesToSell.toLocaleString()}</span> 股
-                              <span className="text-muted-foreground ml-1">(剩: <span className="text-profit font-bold">{zeroCostShares.toLocaleString()}</span>)</span>
+                              收回本金需賣出 <span className="font-bold">{sharesToSell.toLocaleString()}</span> 股
+                              <span className="text-muted-foreground ml-1">（保留 <span className="text-profit font-bold">{zeroCostShares.toLocaleString()}</span> 股）</span>
                             </span>
                           )}
                           {/* 亏损股票只显示红色盈亏 */}
@@ -392,10 +391,11 @@ function ZeroCostCalculator({
                         </div>
                       )}
                       </div>
-                      <div className="col-span-2 xl:col-span-1 flex justify-end gap-2">
-                        <div className="w-[90px]">{!achieved && pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('recovery');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-primary whitespace-nowrap">收回本金</button>}</div>
-                        <div className="w-[90px]">{pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('partial');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-sky-400 whitespace-nowrap">分批賣出</button>}</div>
-                        <div className="w-[90px]">{pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('close');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-rose-300 whitespace-nowrap">全部平倉</button>}</div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 border-t border-border/60 pt-3">
+                        <div className="min-w-0">{!achieved && pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('recovery');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-primary whitespace-nowrap">收回本金</button>}</div>
+                        <div className="min-w-0">{pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('partial');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-sky-400 whitespace-nowrap">分批賣出</button>}</div>
+                        <div className="min-w-0">{pos.position_side !== 'SHORT' && <button type="button" onClick={e => {e.stopPropagation();setRecoveryMode('close');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 text-xs text-rose-300 whitespace-nowrap">全部平倉</button>}</div>
                       </div>
                     </div>
                   )
@@ -446,7 +446,8 @@ function ZeroCostCalculator({
             </div>
           )}
         </div>
-        
+          <ZeroCostRecovery selected={recoveryPosition} mode={recoveryMode} onClose={() => setRecoveryPosition(null)} onSync={onSync} />
+        </div>
       </div>
     </div>
   )
