@@ -14,7 +14,8 @@ import {
   Wallet
 } from 'lucide-react'
 import { 
-  getQuote, 
+  getQuote,
+  getTradingQuote,
   getHistoricalKLines,
   type QuoteData,
   type DataSource
@@ -595,6 +596,7 @@ export default function Home() {
   const [entryPrice, setEntryPrice] = useState('')  // 改名：entryPrice 通用於 LONG/SHORT
   const [stopLoss, setStopLoss] = useState('')
   const [timeInForce, setTimeInForce] = useState<'DAY' | 'GTC'>('GTC')
+  const [entryMode, setEntryMode] = useState<'AUTO' | 'LIMIT' | 'STOP'>('AUTO')
   const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET' | 'STOP'>('LIMIT')  // 新增：訂單類型
   const [triggerPrice, setTriggerPrice] = useState('')  // 新增：Stop Entry 觸發價
   const [quoteData, setQuoteData] = useState<QuoteData | null>(null)
@@ -725,6 +727,7 @@ export default function Home() {
   
   // Fetch quote when ticker changes
   useEffect(() => {
+    let active = true
     const fetchData = async () => {
       if (ticker.length >= 1) {
         setLoading(true)
@@ -738,6 +741,7 @@ export default function Home() {
           // Yahoo 最多 2000 日，富途最多 365 日
           const maxDays = dataSource === 'futu' ? 365 : 2000
           const klines = await getHistoricalKLines(ticker, maxDays, dataSource)
+          if (!active) return
           
           setQuoteData(quote)
           
@@ -771,6 +775,7 @@ export default function Home() {
             setEntryPrice(quote.lastPrice.toFixed(2))
           }
         } catch (error) {
+          if (!active) return
           console.error('Error fetching quote:', error)
           setQuoteData(null)
           setAtr(null)
@@ -780,8 +785,30 @@ export default function Home() {
     }
     
     const timer = setTimeout(fetchData, 500)
-    return () => clearTimeout(timer)
+    return () => {active = false;clearTimeout(timer)}
   }, [ticker, dataSource])
+
+  useEffect(() => {
+    if (!/^[A-Za-z][A-Za-z0-9]{0,5}(?:[.\-][A-Za-z])?$/.test(ticker)) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    const refresh = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const fresh = await getTradingQuote(ticker)
+          if (active) setQuoteData(previous => previous ? {...previous, ...fresh} : previous)
+        } catch {
+          if (active) setQuoteData(previous => previous ? {...previous, tradingQuoteValid:false, priceWarning:'時段報價暫時無法更新，請留意資料時間'} : previous)
+        }
+      }
+      if (active) timer = setTimeout(refresh, 30000)
+    }
+    timer = setTimeout(refresh, 30000)
+    return () => {active = false;clearTimeout(timer)}
+  }, [ticker, dataSource])
+
+  const isBreakoutEntry = entryMode === 'STOP' || entryMode === 'AUTO' && !!quoteData?.lastPrice &&
+    (direction === 'LONG' ? parseFloat(entryPrice) > quoteData.lastPrice : parseFloat(entryPrice) < quoteData.lastPrice)
 
   // 當 ATR 週期改變時，重新計算 ATR（如果有歷史數據）
   useEffect(() => {
@@ -924,27 +951,21 @@ export default function Home() {
     setOrderResult(null)
 
     try {
-      // 自動判斷 order_type：根據 entryPrice 與現價比較
-      const currentPrice = quoteData?.lastPrice || 0
       const entryNum = parseFloat(entryPrice)
-      let effectiveOrderType: 'LIMIT' | 'MARKET' | 'STOP' = 'LIMIT'
-      let triggerPriceToUse: number | undefined
-
-      if (entryNum > 0 && currentPrice > 0) {
-        if (direction === 'LONG') {
-          // Long: entryPrice > 現價 = BUY STOP (突破買入)
-          if (entryNum > currentPrice) {
-            effectiveOrderType = 'STOP'
-            triggerPriceToUse = entryNum
-          }
-        } else {
-          // Short: entryPrice < 現價 = SELL STOP (突破賣出)
-          if (entryNum < currentPrice) {
-            effectiveOrderType = 'STOP'
-            triggerPriceToUse = entryNum
-          }
-        }
+      const isUS = /^[A-Za-z][A-Za-z0-9]{0,5}(?:[.\-][A-Za-z])?$/.test(ticker)
+      let currentPrice = quoteData?.lastPrice || 0
+      if (entryMode === 'AUTO' && isUS) {
+        const fresh = await getTradingQuote(ticker)
+        setQuoteData(previous => previous ? {...previous, ...fresh} : fresh)
+        if (!fresh.tradingQuoteValid || !fresh.lastPrice) throw Error((fresh.priceWarning || '報價未確認') + '；可稍後再試，或自行選擇限價模式。')
+        currentPrice = fresh.lastPrice
+        const before = direction === 'LONG' ? entryNum > (quoteData?.lastPrice || 0) : entryNum < (quoteData?.lastPrice || 0)
+        const after = direction === 'LONG' ? entryNum > currentPrice : entryNum < currentPrice
+        if (before !== after && !window.confirm(`最新${fresh.priceSessionLabel}報價為 $${currentPrice.toFixed(2)}，本次應為${after ? '突破單（只限盤中觸發）' : '限價單'}。入場價仍為 $${entryNum.toFixed(2)}，是否確認？`)) throw Error('已取消提交，請重新核對。')
       }
+      const breakout = entryMode === 'STOP' || entryMode === 'AUTO' && currentPrice > 0 && (direction === 'LONG' ? entryNum > currentPrice : entryNum < currentPrice)
+      const effectiveOrderType = breakout ? 'STOP' : 'LIMIT'
+      const triggerPriceToUse = breakout ? entryNum : undefined
 
       // 突破單觸發後以市價成交
       const finalOrderType = effectiveOrderType === 'STOP' ? 'MARKET' : effectiveOrderType
@@ -959,6 +980,7 @@ export default function Home() {
         stop_loss_price: stopLoss ? parseFloat(stopLoss) : undefined,
         time_in_force: timeInForce,
         trigger_price: triggerPriceToUse,
+        auto_entry: entryMode === 'AUTO' && isUS,
       }
       let response = await placeOrder(request)
       while (response.status === 'duplicate_confirmation_required' && response.duplicate_orders?.length) {
@@ -995,7 +1017,7 @@ export default function Home() {
     
     setOrdering(false)
     orderInFlight.current = false
-  }, [ticker, entryPrice, shares, direction, stopLoss, timeInForce, syncBrokerPositions, quoteData, triggerPrice])
+  }, [ticker, entryPrice, shares, direction, stopLoss, timeInForce, syncBrokerPositions, quoteData, triggerPrice, entryMode])
   
   // Handle environment switch
   const handleEnvSwitch = useCallback(async (newEnv: 'SIMULATE' | 'REAL') => {
@@ -1236,9 +1258,11 @@ export default function Home() {
                   </div>
                   <div className="text-right">
                     <p className="text-2xl font-bold">${quoteData.lastPrice?.toFixed(2)}</p>
+                    {quoteData.priceSessionLabel && <p className="mt-1 text-xs text-muted-foreground">{quoteData.priceSource === 'futu' ? '富途' : '報價'} · {quoteData.priceSessionLabel}{quoteData.priceTime ? ` · ${quoteData.priceTime} 美東` : ''}</p>}
+                    {quoteData.priceWarning && <p className="mt-1 max-w-xs text-xs text-warning">{quoteData.priceWarning}</p>}
                     <p className={`flex items-center gap-1 ${(quoteData.change ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
                       {(quoteData.change ?? 0) >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                      {(quoteData.change ?? 0) >= 0 ? '+' : ''}{quoteData.changePercent?.toFixed(2)}%
+                      {typeof quoteData.changePercent === 'number' && (quoteData.change ?? 0) >= 0 ? '+' : ''}{typeof quoteData.changePercent === 'number' ? quoteData.changePercent.toFixed(2) + '%' : '漲跌待核對'}
                     </p>
                   </div>
                 </div>
@@ -1306,7 +1330,7 @@ export default function Home() {
                 {/* Candlestick Chart */}
                 {historicalData.length > 0 && (
                   <div className="mt-4 pt-4 border-t border-border">
-                    <h4 className="text-sm text-muted-foreground mb-2">價格圖表</h4>
+                    <h4 className="text-sm text-muted-foreground mb-2">日線圖（盤中交易）</h4>
                     <CandlestickChart 
                       data={historicalData} 
                       direction={direction}
@@ -1353,15 +1377,12 @@ export default function Home() {
                       placeholder={direction === 'LONG' ? '買入' : '賣出'}
                       className="w-full mt-1 px-4 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono"
                     />
-                    {quoteData?.lastPrice && entryPrice && (
-                      <p className={`text-xs mt-1 ${parseFloat(entryPrice) > quoteData.lastPrice ? 'text-orange-400' : 'text-muted-foreground'}`}>
-                        {parseFloat(entryPrice) > quoteData.lastPrice
-                          ? '⬆ 突破價'
-                          : parseFloat(entryPrice) < quoteData.lastPrice
-                            ? '⬇ 限價'
-                            : '= 現價'}
-                      </p>
-                    )}
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                      <select aria-label="入場委託模式" value={entryMode} onChange={e => setEntryMode(e.target.value as 'AUTO' | 'LIMIT' | 'STOP')} className="rounded bg-secondary px-1 py-0.5 text-muted-foreground">
+                        <option value="AUTO">自動判斷</option><option value="LIMIT">限價</option><option value="STOP">突破</option>
+                      </select>
+                      <span className={isBreakoutEntry ? 'text-orange-400' : 'text-muted-foreground'}>{isBreakoutEntry ? '突破單 · 只限盤中' : '限價單'}</span>
+                    </div>
                   </div>
 
                   <div>
@@ -1589,7 +1610,7 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setTicker(''); setEntryPrice(''); setStopLoss(''); setTimeInForce('GTC'); setQuoteData(null); setAtr(null); setHistoricalData([]); setDirection('LONG'); setOrderType('LIMIT'); setTriggerPrice(''); }}
+                  onClick={() => { setTicker(''); setEntryPrice(''); setStopLoss(''); setTimeInForce('GTC'); setQuoteData(null); setAtr(null); setHistoricalData([]); setDirection('LONG'); setOrderType('LIMIT'); setEntryMode('AUTO'); setTriggerPrice(''); }}
                   className="px-4 py-3 bg-secondary border border-border rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
@@ -1822,17 +1843,17 @@ export default function Home() {
                   </div>
                   <div className="flex justify-between mb-2">
                     <span className="text-muted-foreground">訂單類型:</span>
-                    <span className={`font-mono ${quoteData?.lastPrice && entryPrice && parseFloat(entryPrice) > quoteData.lastPrice ? 'text-orange-400' : ''}`}>
-                      {quoteData?.lastPrice && entryPrice && parseFloat(entryPrice) > quoteData.lastPrice ? '突破單' : '限價單'}
+                    <span className={`font-mono ${isBreakoutEntry ? 'text-orange-400' : ''}`}>
+                      {isBreakoutEntry ? '突破單' : '限價單'}
                     </span>
                   </div>
                   <div className="flex justify-between mb-2">
                     <span className="text-muted-foreground">{direction === 'LONG' ? '買入' : '賣出'}價:</span>
-                    <span className={`font-mono ${quoteData?.lastPrice && entryPrice && parseFloat(entryPrice) > quoteData.lastPrice ? 'text-orange-400' : ''}`}>
+                    <span className={`font-mono ${isBreakoutEntry ? 'text-orange-400' : ''}`}>
                       ${parseFloat(entryPrice).toFixed(2)}
                       {quoteData?.lastPrice && entryPrice && (
                         <span className="text-xs ml-1">
-                          ({parseFloat(entryPrice) > quoteData.lastPrice ? '突破' : parseFloat(entryPrice) < quoteData.lastPrice ? '限價' : '='})
+                          ({isBreakoutEntry ? '突破' : '限價'})
                         </span>
                       )}
                     </span>

@@ -41,6 +41,7 @@ export interface BalanceResponse {
 }
 
 export interface OrderRequest {
+  auto_entry?: boolean
   symbol: string
   price: number
   quantity: number

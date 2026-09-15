@@ -14,6 +14,7 @@ Environment variables:
 """
 import os
 import sys
+import re
 import json
 import httpx
 import threading
@@ -1482,6 +1483,7 @@ def _place_order(
     expire_date: Optional[str] = None,  # YYYY-MM-DD, only for GTD
     trigger_price: Optional[float] = None,  # Stop Entry觸發價
     confirmed_duplicate_ids: Optional[List[str]] = None,
+    auto_entry: bool = False,
 ) -> Dict:
     """
     Place an order via Futu OpenD.
@@ -1536,6 +1538,14 @@ def _place_order(
     else:  # US
         market = futu.TrdMarket.US
     
+    if auto_entry and futu_code.startswith('US.'):
+        quote = _entry_quote(symbol)
+        if not quote['tradingQuoteValid']:
+            raise ValueError(quote['priceWarning'] + '；尚未提交訂單')
+        breakout = price > quote['lastPrice'] if side.upper() == 'BUY' else price < quote['lastPrice']
+        if breakout != bool(trigger_price):
+            raise ValueError(f"{quote['priceSessionLabel']}報價已變為 ${quote['lastPrice']:.2f}，訂單類型需要重新確認；尚未提交訂單")
+
     # Create trade context
     ctx = _ManagedContext(futu.OpenSecTradeContext(filter_trdmarket=market, host=host, port=port), host, port, market)
     try:
@@ -1795,6 +1805,7 @@ class OrderRequest(BaseModel):
     trigger_price: Optional[float] = None  # 觸發價（Stop Entry單用：突破呢個價自動成交）
     remark: Optional[str] = None
     confirmed_duplicate_ids: List[str] = []
+    auto_entry: bool = False
 
 
 class OrderResponse(BaseModel):
@@ -2194,6 +2205,7 @@ def place_order(order: OrderRequest):
             expire_date=order.expire_date,
             trigger_price=order.trigger_price,
             confirmed_duplicate_ids=order.confirmed_duplicate_ids,
+            auto_entry=order.auto_entry,
         )
         
         return OrderResponse(
@@ -2708,6 +2720,19 @@ from zero_cost_api import install as _install_zero_cost
 _ZeroCostBroker = _install_zero_cost(sys.modules[__name__])
 from position_management_api import install as _install_position_management
 _install_position_management(sys.modules[__name__], _ZeroCostBroker)
+
+
+from session_quote import install as _install_session_quote
+_install_session_quote(sys.modules[__name__])
+
+@app.get('/api/trading-quote/{symbol}', dependencies=[Depends(verify_api_key)])
+def get_trading_quote(symbol: str):
+    try:
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,5}(?:[.\-][A-Za-z])?', symbol):
+            raise ValueError('股票代號無效')
+        return _entry_quote(symbol.upper())
+    except Exception as exc:
+        raise HTTPException(409, traditional(str(exc)))
 
 
 if __name__ == "__main__":

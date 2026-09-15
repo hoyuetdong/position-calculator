@@ -11,12 +11,12 @@ class Deferred(RuntimeError):
 
 class BrokerIO:
     # 留餘量俾其他程式；普通查詢再預留兩個名額俾止蝕核對。
-    LIMITS = {'order_list_query': 6, 'position_list_query': 6, 'accinfo_query': 6,
+    LIMITS = {'get_market_state': 6, 'order_list_query': 6, 'position_list_query': 6, 'accinfo_query': 6,
               'history_order_list_query': 4, 'place_order': 10,
               'modify_order': 6, 'order_fee_query': 4, 'get_order_book': 20,
               'get_market_snapshot': 30, 'request_history_kline': 20,
               'subscribe': 10, 'unlock_trade': 8, 'get_acc_list': 6}
-    TTL = {'order_fee_query': 300, 'get_order_book': 3, 'order_list_query': 3, 'position_list_query': 5, 'accinfo_query': 30,
+    TTL = {'get_market_state': 10, 'order_fee_query': 300, 'get_order_book': 3, 'order_list_query': 3, 'position_list_query': 5, 'accinfo_query': 30,
            'history_order_list_query': 300, 'get_acc_list': 30,
            'get_market_snapshot': 2, 'request_history_kline': 300}
     REFRESHABLE = {'order_list_query', 'position_list_query', 'accinfo_query'}

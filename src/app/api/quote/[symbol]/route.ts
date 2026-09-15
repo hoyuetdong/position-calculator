@@ -98,7 +98,27 @@ export async function GET(
       quote.atr14 = null  // Yahoo 暫時未有 ATR
     }
 
+    // 日線指標沿用選取來源，美股下單參考價使用富途對應時段報價。
+    if (/^[A-Za-z][A-Za-z0-9]{0,5}(?:[.\-][A-Za-z])?$/.test(symbol)) {
+      try {
+        const response = await fetch(`${process.env.PYTHON_API_URL || 'http://backend:8000'}/api/trading-quote/${encodeURIComponent(symbol)}`, {
+          cache:'no-store', headers:{'X-API-Key':process.env.API_SECRET || ''}, signal:AbortSignal.timeout(15000),
+        })
+        const data = await response.json()
+        if (!response.ok) throw Error(data.detail || '富途報價暫時無法核對')
+        Object.assign(quote, data)
+      } catch (error) {
+        quote.tradingQuoteValid = false
+        quote.priceSessionLabel = '參考價'
+        quote.priceWarning = error instanceof Error ? error.message : '時段報價暫缺'
+      }
+    }
+
     return NextResponse.json({
+      priceSession: quote.priceSession, priceSessionLabel: quote.priceSessionLabel,
+      priceTime: quote.priceTime, priceTimezone: quote.priceTimezone, priceCheckedAt: quote.priceCheckedAt,
+      priceSource: quote.priceSource, tradingQuoteValid: quote.tradingQuoteValid, priceWarning: quote.priceWarning,
+      regularPrice: quote.regularPrice,
       symbol: quote.symbol,
       name: quote.name,
       lastPrice: quote.lastPrice,
@@ -111,7 +131,7 @@ export async function GET(
       changePercent: quote.changePercent,
       high52w: quote.high52w,
       low52w: quote.low52w,
-      currency: source === 'futu' ? 'HKD' : 'USD',
+      currency: /^\d|\.HK$/i.test(symbol) ? 'HKD' : 'USD',
       source: source,
       ema10: quote.ema10,
       ema20: quote.ema20,

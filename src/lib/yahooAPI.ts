@@ -7,6 +7,16 @@ import { calculateSMA, calculateEMA } from './indicators'
 export type DataSource = 'yahoo' | 'futu'
 
 export interface QuoteData {
+  priceSession?: string
+  priceSessionLabel?: string
+  priceTime?: string
+  priceTimezone?: string
+  priceCheckedAt?: string
+  priceSource?: string
+  tradingQuoteValid?: boolean
+  priceWarning?: string
+  regularPrice?: number
+
   symbol?: string
   ticker?: string
   name?: string
@@ -90,6 +100,10 @@ export async function getQuote(symbol: string, source: DataSource = 'yahoo'): Pr
     }
     
     return {
+      priceSession: data.priceSession, priceSessionLabel: data.priceSessionLabel,
+      priceTime: data.priceTime, priceTimezone: data.priceTimezone, priceCheckedAt: data.priceCheckedAt,
+      priceSource: data.priceSource, tradingQuoteValid: data.tradingQuoteValid, priceWarning: data.priceWarning,
+      regularPrice: data.regularPrice,
       symbol: data.symbol || normalized,
       name: data.name || normalized,
       lastPrice: data.lastPrice,
@@ -166,4 +180,12 @@ export async function getATR(symbol: string, period: number = 14): Promise<numbe
  */
 export async function closeFutuAPI(): Promise<void> {
   // 冇野要做
+}
+
+
+export async function getTradingQuote(symbol: string): Promise<QuoteData> {
+  const response = await fetch(`/api/trading-quote/${encodeURIComponent(symbol)}`, {cache:'no-store', signal:AbortSignal.timeout(16000)})
+  const data = await response.json()
+  if (!response.ok) throw Error(data.detail || '未能核對即時報價')
+  return data
 }

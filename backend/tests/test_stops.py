@@ -504,6 +504,14 @@ class Stops(unittest.TestCase):
             m._place_order('AAPL', 100, 10, 'MARKET', 'BUY', 'localhost', 1, trd_env='REAL', trigger_price=100)
             self.assertEqual(Context.calls[-1]['order_type'], 'STOP')
             self.assertEqual(Context.calls[-1]['session'], 'RTH')
+            with patch.object(m, '_entry_quote', return_value={'tradingQuoteValid':True,'lastPrice':1608.5,'priceSessionLabel':'夜盤'}):
+                m._place_order('ASML', 1596, 10, 'LIMIT', 'BUY', 'localhost', 1, trd_env='REAL', auto_entry=True)
+                self.assertEqual(Context.calls[-1]['order_type'], 'NORMAL')
+                self.assertEqual(Context.calls[-1]['session'], 'ALL')
+                self.assertEqual(Context.calls[-1]['price'], 1596)
+                self.assertNotIn('aux_price', Context.calls[-1])
+                m._place_order('ASML', 1620, 10, 'LIMIT', 'SELL', 'localhost', 1, trd_env='REAL', auto_entry=True)
+                self.assertEqual(Context.calls[-1]['order_type'], 'NORMAL')
             duplicate.return_value = {'success': False, 'status': 'duplicate_confirmation_required', 'duplicate_orders': [{'order_id': 'old'}]}
             before = len(Context.calls)
             result = m._place_order('AAPL', 100, 10, 'LIMIT', 'BUY', 'localhost', 1, trd_env='REAL')
