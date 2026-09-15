@@ -190,17 +190,9 @@ function ZeroCostCalculator({
 }) {
   const [recoveryPosition, setRecoveryPosition] = useState<BrokerPosition | null>(null)
   const [recoveryMode, setRecoveryMode] = useState<'recovery' | 'partial' | 'close'>('recovery')
-  const [showDemoPositions, setShowDemoPositions] = useState(true)
   // Filter for US stocks only (not HK stocks)
   const usPositions = brokerPositions.filter(pos => !pos.symbol.endsWith('.HK'))
-  const demoPositions: BrokerPosition[] = [
-    {symbol:'NVDA', quantity:120, cost_price:100, current_price:150},
-    {symbol:'AAPL', quantity:45, cost_price:210, current_price:224},
-    {symbol:'TSLA', quantity:32, cost_price:320, current_price:288},
-    {symbol:'AMD', quantity:80, cost_price:0, current_price:180},
-    {symbol:'PLTR', quantity:200, cost_price:null, current_price:90},
-  ].map(p => ({...p, name:'版面示範', account_id:'demo-layout', position_side:'LONG', asset_type:'US Stock'}))
-  const displayPositions = showDemoPositions ? [...usPositions, ...demoPositions] : usPositions
+
 
 
   // 計算總持倉市值
@@ -341,16 +333,13 @@ function ZeroCostCalculator({
               <Database className="w-5 h-5 text-primary" />
               富途美股持倉
             </h3>
-            <button type="button" onClick={() => setShowDemoPositions(v => !v)} className="text-xs text-muted-foreground hover:text-primary whitespace-nowrap">{showDemoPositions ? '隱藏示範' : '顯示示範'}</button>
           </div>
           
-          {showDemoPositions && <p className="mb-3 text-xs text-muted-foreground">示範持倉僅供預覽，不能交易，亦不計入持倉佔比。</p>}
-          {displayPositions.length > 0 ? (
+          {usPositions.length > 0 ? (
             <div className="space-y-4">
               {/* 按盈亏百分比由高至低排序 */}
-              {displayPositions
+              {usPositions
                 .map((pos, idx) => {
-                  const isDemo = pos.account_id === 'demo-layout'
                   const hasCost = pos.cost_price !== null && Number.isFinite(pos.cost_price)
                   const achieved = hasCost && pos.cost_price! <= 0
                   const hasPL = hasCost && pos.cost_price! > 0 && pos.current_price !== null && pos.current_price > 0
@@ -361,16 +350,15 @@ function ZeroCostCalculator({
                     ? Math.min(pos.quantity, Math.ceil(pos.quantity * pos.cost_price! / pos.current_price!)) : 0
                   const zeroCostShares = achieved ? pos.quantity : isProfit && hasPL ? pos.quantity - sharesToSell : 0
 
-                  return { pos, idx, isDemo, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }
+                  return { pos, idx, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }
                 })
                 .sort((a, b) => Number(b.achieved) - Number(a.achieved) || b.plPercent - a.plPercent)
-                .map(({ pos, idx, isDemo, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }) => {
+                .map(({ pos, idx, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }) => {
                   return (
                     <article key={idx} className="min-w-0 rounded-xl border border-[#414141] bg-[#242424] p-4 shadow-sm">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2">
-                          <button type="button" disabled={isDemo || !hasPL || plPercent <= 0} title="填入零成本計算器" onClick={() => {if (!isDemo && hasPL && plPercent > 0) onSelectPosition?.(Math.round(plPercent * 10) / 10, pos.quantity)}} className="text-lg font-semibold tracking-wide text-white disabled:cursor-default">{pos.symbol}</button>
-                          {isDemo && <span className="rounded border border-sky-400/20 bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-300">示範</span>}
+                          <button type="button" disabled={!hasPL || plPercent <= 0} title="填入零成本計算器" onClick={() => {if (hasPL && plPercent > 0) onSelectPosition?.(Math.round(plPercent * 10) / 10, pos.quantity)}} className="text-lg font-semibold tracking-wide text-white disabled:cursor-default">{pos.symbol}</button>
                         </div>
                         {hasPL && <span className={`shrink-0 text-base font-semibold tabular-nums ${isProfit ? 'text-profit' : 'text-loss'}`}>
                           {isProfit ? '+' : ''}{plPercent.toFixed(1)}%
@@ -385,14 +373,14 @@ function ZeroCostCalculator({
                         {!achieved && !hasPL && <span className="text-muted-foreground">成本／現價資料暫缺</span>}
                       </div>
                       {pos.position_side !== 'SHORT' && <div className="mt-4 grid grid-cols-3 gap-2">
-                        <button type="button" disabled={isDemo || achieved} title={isDemo ? '示範持倉不能交易' : achieved ? '本金已收回' : undefined}
-                          onClick={() => {if(isDemo || achieved) return;setRecoveryMode('recovery');setRecoveryPosition(pos)}}
+                        <button type="button" disabled={achieved} title={achieved ? '本金已收回' : undefined}
+                          onClick={() => {if(achieved) return;setRecoveryMode('recovery');setRecoveryPosition(pos)}}
                           className="rounded-lg border border-[#505050] bg-[#303030] py-2 text-xs font-medium text-gray-200 transition-colors hover:bg-[#3b3b3b] disabled:cursor-not-allowed disabled:opacity-60">收回本金</button>
-                        <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined}
-                          onClick={() => {if(isDemo) return;setRecoveryMode('partial');setRecoveryPosition(pos)}}
+                        <button type="button"
+                          onClick={() => {setRecoveryMode('partial');setRecoveryPosition(pos)}}
                           className="rounded-lg border border-[#505050] bg-[#303030] py-2 text-xs font-medium text-gray-200 transition-colors hover:bg-[#3b3b3b] disabled:cursor-not-allowed disabled:opacity-60">分批賣出</button>
-                        <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined}
-                          onClick={() => {if(isDemo) return;setRecoveryMode('close');setRecoveryPosition(pos)}}
+                        <button type="button"
+                          onClick={() => {setRecoveryMode('close');setRecoveryPosition(pos)}}
                           className="rounded-lg border border-rose-300/25 bg-rose-300/5 py-2 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-300/10 disabled:cursor-not-allowed disabled:opacity-60">全部平倉</button>
                       </div>}
                     </article>
