@@ -346,7 +346,7 @@ function ZeroCostCalculator({
           
           {showDemoPositions && <p className="mb-3 text-xs text-muted-foreground">示範持倉僅供預覽，不能交易，亦不計入持倉佔比。</p>}
           {displayPositions.length > 0 ? (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {/* 按盈亏百分比由高至低排序 */}
               {displayPositions
                 .map((pos, idx) => {
@@ -366,52 +366,36 @@ function ZeroCostCalculator({
                 .sort((a, b) => Number(b.achieved) - Number(a.achieved) || b.plPercent - a.plPercent)
                 .map(({ pos, idx, isDemo, achieved, hasPL, plPercent, isProfit, sharesToSell, zeroCostShares }) => {
                   return (
-                    <div 
-                      key={idx} 
-                      className="min-w-0 space-y-3 p-4 bg-secondary/30 hover:bg-secondary/50 rounded-lg cursor-pointer transition-colors"
-                      onClick={() => {
-                        // 点击填充到左边计算器
-                        if (!isDemo && hasPL && plPercent > 0 && onSelectPosition) {
-                          onSelectPosition(Math.round(plPercent * 10) / 10, pos.quantity)
-                        }
-                      }}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                      <div className="flex items-center gap-3 shrink-0">
-                        <span className="font-bold text-white text-base">{pos.symbol}</span>
-                        {isDemo && <span className="rounded bg-sky-400/15 px-1.5 py-0.5 text-[10px] text-sky-300">示範</span>}
-                        <span className="text-sm text-gray-500">{pos.quantity} 股</span>
-                      </div>
-                      
-                      <div className="min-w-0 text-sm">
-                      {/* 右侧：零成本信息 + 盈亏 */}
-                      {achieved && <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-profit">
-                        <div className="font-bold text-sm">已達成零成本持倉</div>
-                      </div>}
-                      {!achieved && !hasPL && <span className="text-xs text-muted-foreground">成本／現價資料暫缺</span>}
-                      {hasPL && (
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                          {/* 盈利且有正数才显示零成本信息 */}
-                          {isProfit && plPercent > 0 && (
-                            <span className="text-xs text-warning">
-                              收回本金需賣出 <span className="font-bold">{sharesToSell.toLocaleString()}</span> 股
-                              <span className="text-muted-foreground ml-1">（保留 <span className="text-profit font-bold">{zeroCostShares.toLocaleString()}</span> 股）</span>
-                            </span>
-                          )}
-                          {/* 亏损股票只显示红色盈亏 */}
-                          <span className={`text-base font-bold ${isProfit ? 'text-profit' : 'text-loss'}`}>
-                            {isProfit ? '+' : ''}{plPercent.toFixed(1)}%
-                          </span>
+                    <article key={idx} className="min-w-0 rounded-xl border border-[#414141] bg-[#242424] p-4 shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <button type="button" disabled={isDemo || !hasPL || plPercent <= 0} title="填入零成本計算器" onClick={() => {if (!isDemo && hasPL && plPercent > 0) onSelectPosition?.(Math.round(plPercent * 10) / 10, pos.quantity)}} className="text-lg font-semibold tracking-wide text-white disabled:cursor-default">{pos.symbol}</button>
+                          {isDemo && <span className="rounded border border-sky-400/20 bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-300">示範</span>}
                         </div>
-                      )}
+                        {hasPL && <span className={`shrink-0 text-base font-semibold tabular-nums ${isProfit ? 'text-profit' : 'text-loss'}`}>
+                          {isProfit ? '+' : ''}{plPercent.toFixed(1)}%
+                        </span>}
+                        {achieved && <span className="shrink-0 rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-profit">零成本持倉</span>}
                       </div>
+                      <div className="mt-2 flex min-h-5 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+                        <span className="shrink-0 text-muted-foreground">持有 <span className="font-medium tabular-nums text-gray-200">{pos.quantity.toLocaleString()}</span> 股</span>
+                        {hasPL && plPercent > 0 && <span className="text-muted-foreground">
+                          收回本金：賣出 <span className="font-medium text-gray-200">{sharesToSell.toLocaleString()}</span> 股 · 保留 <span className="font-medium text-gray-200">{zeroCostShares.toLocaleString()}</span> 股
+                        </span>}
+                        {!achieved && !hasPL && <span className="text-muted-foreground">成本／現價資料暫缺</span>}
                       </div>
-                      <div className="grid grid-cols-3 gap-2 border-t border-border/60 pt-3">
-                        <div className="min-w-0">{!achieved && pos.position_side !== 'SHORT' && <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined} onClick={e => {if(isDemo) return;e.stopPropagation();setRecoveryMode('recovery');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-xs text-primary whitespace-nowrap">收回本金</button>}</div>
-                        <div className="min-w-0">{pos.position_side !== 'SHORT' && <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined} onClick={e => {if(isDemo) return;e.stopPropagation();setRecoveryMode('partial');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-xs text-sky-400 whitespace-nowrap">分批賣出</button>}</div>
-                        <div className="min-w-0">{pos.position_side !== 'SHORT' && <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined} onClick={e => {if(isDemo) return;e.stopPropagation();setRecoveryMode('close');setRecoveryPosition(pos)}} className="w-full rounded bg-[#363636] py-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-xs text-rose-300 whitespace-nowrap">全部平倉</button>}</div>
-                      </div>
-                    </div>
+                      {pos.position_side !== 'SHORT' && <div className="mt-4 grid grid-cols-3 gap-2">
+                        <button type="button" disabled={isDemo || achieved} title={isDemo ? '示範持倉不能交易' : achieved ? '本金已收回' : undefined}
+                          onClick={() => {if(isDemo || achieved) return;setRecoveryMode('recovery');setRecoveryPosition(pos)}}
+                          className="rounded-lg border border-[#505050] bg-[#303030] py-2 text-xs font-medium text-gray-200 transition-colors hover:bg-[#3b3b3b] disabled:cursor-not-allowed disabled:opacity-60">收回本金</button>
+                        <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined}
+                          onClick={() => {if(isDemo) return;setRecoveryMode('partial');setRecoveryPosition(pos)}}
+                          className="rounded-lg border border-[#505050] bg-[#303030] py-2 text-xs font-medium text-gray-200 transition-colors hover:bg-[#3b3b3b] disabled:cursor-not-allowed disabled:opacity-60">分批賣出</button>
+                        <button type="button" disabled={isDemo} title={isDemo ? '示範持倉不能交易' : undefined}
+                          onClick={() => {if(isDemo) return;setRecoveryMode('close');setRecoveryPosition(pos)}}
+                          className="rounded-lg border border-rose-300/25 bg-rose-300/5 py-2 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-300/10 disabled:cursor-not-allowed disabled:opacity-60">全部平倉</button>
+                      </div>}
+                    </article>
                   )
                 })}
               
